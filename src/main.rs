@@ -16,8 +16,8 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::{Fullscreen, WindowBuilder};
 use url::Url;
-use wry::WebViewBuilder;
 use wry::WebViewBuilderExtUnix;
+use wry::{PageLoadEvent, WebViewBuilder};
 
 const OVERLAY_SCRIPT: &str = r#"
 (function () {
@@ -202,6 +202,7 @@ struct Args {
 #[derive(Debug, Clone)]
 enum AppEvent {
     FocusLost,
+    PageLoaded,
     EscapeOpen,
     EscapeCancel,
     EscapeSubmit(String),
@@ -437,6 +438,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let target_url = url.as_str().to_string();
 
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let fullscreen = event_loop
@@ -458,9 +460,46 @@ fn main() {
     let builder = WebViewBuilder::new_gtk(vbox);
 
     let proxy = event_loop.create_proxy();
+    let loading_html = format!(
+        r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html, body {{
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #0f172a;
+      }}
+    </style>
+  </head>
+  <body>
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {{
+        window.location.replace({target_url:?});
+      }});
+    </script>
+  </body>
+</html>"#
+    );
     let webview = builder
-        .with_url(url.as_str())
+        .with_html(loading_html)
         .with_initialization_script(OVERLAY_SCRIPT)
+        .with_background_color((15, 23, 42, 255))
+        .with_on_page_load_handler({
+            let proxy = proxy.clone();
+            move |event, current_url| {
+                if matches!(event, PageLoadEvent::Finished)
+                    && !current_url.starts_with("about:")
+                    && !current_url.starts_with("data:")
+                {
+                    let _ = proxy.send_event(AppEvent::PageLoaded);
+                }
+            }
+        })
         .with_ipc_handler({
             let proxy = proxy.clone();
             move |request| {
@@ -483,7 +522,8 @@ fn main() {
     spawn_hyprland_watchdog(proxy.clone(), done_flag.clone());
 
     let total = Duration::from_secs(total_seconds);
-    let mut start = Instant::now();
+    let mut start: Option<Instant> = None;
+    let mut loaded = false;
     let mut next_tick = Instant::now();
     let mut done = false;
     let mut flash_until: Option<Instant> = None;
@@ -502,6 +542,14 @@ fn main() {
                     return;
                 }
 
+                if start.is_none() {
+                    let _ = webview.evaluate_script(
+                        "window.__focuslockSetTimer && window.__focuslockSetTimer('Loading');",
+                    );
+                    next_tick = Instant::now() + Duration::from_millis(300);
+                    return;
+                }
+
                 if let Some(until) = flash_until {
                     if Instant::now() < until {
                         let _ = webview.evaluate_script(
@@ -513,7 +561,7 @@ fn main() {
                     flash_until = None;
                 }
 
-                let remaining = total.saturating_sub(start.elapsed());
+                let remaining = total.saturating_sub(start.unwrap().elapsed());
                 if remaining.is_zero() {
                     done = true;
                     done_flag.store(true, Ordering::Relaxed);
@@ -553,8 +601,19 @@ fn main() {
                 if done {
                     return;
                 }
-                start = Instant::now();
+                if !loaded {
+                    return;
+                }
+                start = Some(Instant::now());
                 flash_until = Some(Instant::now() + Duration::from_secs(2));
+                next_tick = Instant::now();
+            }
+            Event::UserEvent(AppEvent::PageLoaded) => {
+                if done || loaded {
+                    return;
+                }
+                loaded = true;
+                start = Some(Instant::now());
                 next_tick = Instant::now();
             }
             Event::UserEvent(AppEvent::EscapeOpen) => {
