@@ -18,171 +18,10 @@ use wry::WebViewBuilderExtUnix;
 use wry::{PageLoadEvent, WebViewBuilder};
 
 mod config;
+mod overlay;
 
 use crate::config::Config;
-
-const OVERLAY_SCRIPT: &str = r#"
-(function () {
-  if (window.__focuslockInjected) {
-    return;
-  }
-  window.__focuslockInjected = true;
-
-  var bar = document.createElement('div');
-  bar.id = '__focuslock_bar';
-  bar.style.position = 'fixed';
-  bar.style.top = '0';
-  bar.style.left = '0';
-  bar.style.right = '0';
-  bar.style.height = '24px';
-  bar.style.zIndex = '2147483647';
-  bar.style.display = 'flex';
-  bar.style.alignItems = 'center';
-  bar.style.justifyContent = 'center';
-  bar.style.background = 'rgba(17, 24, 39, 0.72)';
-  bar.style.color = '#f8fafc';
-  bar.style.fontFamily = '"Space Grotesk", "IBM Plex Sans", sans-serif';
-  bar.style.fontSize = '12px';
-  bar.style.letterSpacing = '0.08em';
-  bar.style.textTransform = 'uppercase';
-  bar.style.pointerEvents = 'none';
-  bar.style.backdropFilter = 'blur(6px)';
-  bar.style.position = 'fixed';
-  bar.style.overflow = 'hidden';
-
-  var text = document.createElement('div');
-  text.id = '__focuslock_text';
-  text.textContent = 'Focuslock';
-  bar.appendChild(text);
-
-  var prompt = document.createElement('div');
-  prompt.id = '__focuslock_prompt';
-  prompt.style.position = 'absolute';
-  prompt.style.top = '0';
-  prompt.style.left = '0';
-  prompt.style.right = '0';
-  prompt.style.height = '24px';
-  prompt.style.display = 'none';
-  prompt.style.alignItems = 'center';
-  prompt.style.justifyContent = 'center';
-  prompt.style.gap = '10px';
-  prompt.style.background = 'rgba(15, 23, 42, 0.92)';
-  prompt.style.color = '#f8fafc';
-  prompt.style.fontSize = '12px';
-  prompt.style.letterSpacing = '0.06em';
-  prompt.style.textTransform = 'uppercase';
-  prompt.style.pointerEvents = 'auto';
-
-  var promptLabel = document.createElement('span');
-  promptLabel.id = '__focuslock_prompt_label';
-  promptLabel.textContent = 'Enter unlock PIN';
-
-  var promptInput = document.createElement('span');
-  promptInput.id = '__focuslock_prompt_input';
-  promptInput.textContent = '';
-  promptInput.style.fontFamily = '"IBM Plex Mono", "JetBrains Mono", monospace';
-  promptInput.style.fontSize = '12px';
-  promptInput.style.letterSpacing = '0.2em';
-
-  prompt.appendChild(promptLabel);
-  prompt.appendChild(promptInput);
-  bar.appendChild(prompt);
-
-  var root = document.body || document.documentElement;
-  root.appendChild(bar);
-
-  var promptActive = false;
-  var promptBuffer = '';
-
-  window.__focuslockSetTimer = function (value) {
-    var node = document.getElementById('__focuslock_text');
-    if (node) {
-      node.textContent = value;
-    }
-  };
-
-  function updatePrompt() {
-    var label = document.getElementById('__focuslock_prompt_label');
-    var input = document.getElementById('__focuslock_prompt_input');
-    if (input) {
-      input.textContent = promptBuffer.replace(/./g, '•');
-    }
-  }
-
-  window.__focuslockShowPrompt = function () {
-    promptActive = true;
-    promptBuffer = '';
-    var label = document.getElementById('__focuslock_prompt_label');
-    if (label) {
-      label.textContent = 'Enter unlock PIN';
-    }
-    var node = document.getElementById('__focuslock_prompt');
-    if (node) {
-      node.style.display = 'flex';
-    }
-    updatePrompt();
-  };
-
-  window.__focuslockHidePrompt = function () {
-    promptActive = false;
-    var node = document.getElementById('__focuslock_prompt');
-    if (node) {
-      node.style.display = 'none';
-    }
-    promptBuffer = '';
-  };
-
-  window.__focuslockSetPromptMessage = function (message) {
-    var label = document.getElementById('__focuslock_prompt_label');
-    if (label) {
-      label.textContent = message;
-    }
-  };
-
-  window.__focuslockClearPrompt = function () {
-    promptBuffer = '';
-    updatePrompt();
-  };
-
-  window.addEventListener('keydown', function (event) {
-    if (!promptActive && event.ctrlKey && event.shiftKey && (event.key === 'q' || event.key === 'Q')) {
-      if (window.ipc && window.ipc.postMessage) {
-        window.ipc.postMessage('escape_open');
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (!promptActive) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (event.key === 'Escape') {
-      if (window.ipc && window.ipc.postMessage) {
-        window.ipc.postMessage('escape_cancel');
-      }
-      return;
-    }
-    if (event.key === 'Enter') {
-      if (window.ipc && window.ipc.postMessage) {
-        window.ipc.postMessage('escape_submit:' + promptBuffer);
-      }
-      return;
-    }
-    if (event.key === 'Backspace') {
-      promptBuffer = promptBuffer.slice(0, -1);
-      updatePrompt();
-      return;
-    }
-    if (event.key && event.key.length === 1) {
-      promptBuffer += event.key;
-      updatePrompt();
-    }
-  }, true);
-})();
-"#;
+use crate::overlay::{CLEAR_PROMPT_SCRIPT, HIDE_PROMPT_SCRIPT, OVERLAY_SCRIPT, SHOW_PROMPT_SCRIPT};
 
 #[derive(Debug, Clone)]
 enum AppEvent {
@@ -515,18 +354,14 @@ fn main() {
                 }
 
                 if start.is_none() {
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockSetTimer && window.__focuslockSetTimer('Loading');",
-                    );
+                    let _ = webview.evaluate_script(&overlay::set_timer_script("Loading"));
                     next_tick = Instant::now() + Duration::from_millis(300);
                     return;
                 }
 
                 if let Some(until) = flash_until {
                     if Instant::now() < until {
-                        let _ = webview.evaluate_script(
-                            "window.__focuslockSetTimer && window.__focuslockSetTimer('Timer reset');",
-                        );
+                        let _ = webview.evaluate_script(&overlay::set_timer_script("Timer reset"));
                         next_tick = Instant::now() + Duration::from_millis(300);
                         return;
                     }
@@ -537,9 +372,7 @@ fn main() {
                 if remaining.is_zero() {
                     done = true;
                     done_flag.store(true, Ordering::Relaxed);
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockSetTimer && window.__focuslockSetTimer('Done');",
-                    );
+                    let _ = webview.evaluate_script(&overlay::set_timer_script("Done"));
                     *control_flow = ControlFlow::Wait;
                     return;
                 }
@@ -555,9 +388,7 @@ fn main() {
                     let seconds = remaining_secs % 60;
                     format!("{minutes:02}:{seconds:02}")
                 };
-                let script =
-                    format!("window.__focuslockSetTimer && window.__focuslockSetTimer({text:?});");
-                let _ = webview.evaluate_script(&script);
+                let _ = webview.evaluate_script(&overlay::set_timer_script(&text));
 
                 next_tick = Instant::now() + Duration::from_secs(1);
             }
@@ -596,18 +427,14 @@ fn main() {
                     return;
                 }
                 prompt_open = true;
-                let _ = webview.evaluate_script(
-                    "window.__focuslockShowPrompt && window.__focuslockShowPrompt();",
-                );
+                let _ = webview.evaluate_script(SHOW_PROMPT_SCRIPT);
             }
             Event::UserEvent(AppEvent::EscapeCancel) => {
                 if !prompt_open {
                     return;
                 }
                 prompt_open = false;
-                let _ = webview.evaluate_script(
-                    "window.__focuslockHidePrompt && window.__focuslockHidePrompt();",
-                );
+                let _ = webview.evaluate_script(HIDE_PROMPT_SCRIPT);
             }
             Event::UserEvent(AppEvent::EscapeSubmit(pin)) => {
                 if !prompt_open {
@@ -620,20 +447,13 @@ fn main() {
                     prompt_open = false;
                     done = true;
                     done_flag.store(true, Ordering::Relaxed);
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockHidePrompt && window.__focuslockHidePrompt();",
-                    );
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockSetTimer && window.__focuslockSetTimer('Unlocked');",
-                    );
+                    let _ = webview.evaluate_script(HIDE_PROMPT_SCRIPT);
+                    let _ = webview.evaluate_script(&overlay::set_timer_script("Unlocked"));
                     *control_flow = ControlFlow::Wait;
                 } else {
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockSetPromptMessage && window.__focuslockSetPromptMessage('Incorrect PIN');",
-                    );
-                    let _ = webview.evaluate_script(
-                        "window.__focuslockClearPrompt && window.__focuslockClearPrompt();",
-                    );
+                    let _ = webview
+                        .evaluate_script(&overlay::set_prompt_message_script("Incorrect PIN"));
+                    let _ = webview.evaluate_script(CLEAR_PROMPT_SCRIPT);
                 }
             }
             _ => {}
