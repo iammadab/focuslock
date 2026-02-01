@@ -3,7 +3,6 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
-use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::ControlFlow;
 
 mod config;
