@@ -2,18 +2,19 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::ControlFlow;
 
 mod config;
+mod controller;
 mod hyprland;
 mod overlay;
 mod webview;
 
 use crate::config::Config;
+use crate::controller::AppState;
 use crate::hyprland::{move_window_to_empty_workspace, spawn_hyprland_watchdog};
-use crate::overlay::{CLEAR_PROMPT_SCRIPT, HIDE_PROMPT_SCRIPT, SHOW_PROMPT_SCRIPT};
 use crate::webview::build_app_view;
 
 #[derive(Debug, Clone)]
@@ -53,130 +54,19 @@ fn main() {
     spawn_hyprland_watchdog(proxy.clone(), done_flag.clone());
 
     let total = Duration::from_secs(total_seconds);
-    let mut start: Option<Instant> = None;
-    let mut loaded = false;
-    let mut next_tick = Instant::now();
-    let mut done = false;
-    let mut flash_until: Option<Instant> = None;
-    let mut prompt_open = false;
+    let mut state = AppState::new(total, escape_key);
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(next_tick);
-
-        match event {
-            Event::NewEvents(StartCause::Init) => {
-                next_tick = Instant::now();
-            }
-            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
-                if done {
-                    *control_flow = ControlFlow::Wait;
-                    return;
-                }
-
-                if start.is_none() {
-                    let _ = webview.evaluate_script(&overlay::set_timer_script("Loading"));
-                    next_tick = Instant::now() + Duration::from_millis(300);
-                    return;
-                }
-
-                if let Some(until) = flash_until {
-                    if Instant::now() < until {
-                        let _ = webview.evaluate_script(&overlay::set_timer_script("Timer reset"));
-                        next_tick = Instant::now() + Duration::from_millis(300);
-                        return;
-                    }
-                    flash_until = None;
-                }
-
-                let remaining = total.saturating_sub(start.unwrap().elapsed());
-                if remaining.is_zero() {
-                    done = true;
-                    done_flag.store(true, Ordering::Relaxed);
-                    let _ = webview.evaluate_script(&overlay::set_timer_script("Done"));
-                    *control_flow = ControlFlow::Wait;
-                    return;
-                }
-
-                let remaining_secs = remaining.as_secs();
-                let text = if remaining_secs >= 3600 {
-                    let hours = remaining_secs / 3600;
-                    let minutes = (remaining_secs % 3600) / 60;
-                    let seconds = remaining_secs % 60;
-                    format!("{hours:02}:{minutes:02}:{seconds:02}")
-                } else {
-                    let minutes = remaining_secs / 60;
-                    let seconds = remaining_secs % 60;
-                    format!("{minutes:02}:{seconds:02}")
-                };
-                let _ = webview.evaluate_script(&overlay::set_timer_script(&text));
-
-                next_tick = Instant::now() + Duration::from_secs(1);
-            }
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                if done {
-                    *control_flow = ControlFlow::Exit;
-                }
-            }
-            Event::UserEvent(AppEvent::FocusLost) => {
-                if done {
-                    return;
-                }
-                if !loaded {
-                    return;
-                }
-                start = Some(Instant::now());
-                flash_until = Some(Instant::now() + Duration::from_secs(2));
-                next_tick = Instant::now();
-            }
-            Event::UserEvent(AppEvent::PageLoaded) => {
-                if done || loaded {
-                    return;
-                }
-                loaded = true;
-                start = Some(Instant::now());
-                next_tick = Instant::now();
-            }
-            Event::UserEvent(AppEvent::EscapeOpen) => {
-                if done || prompt_open {
-                    return;
-                }
-                if escape_key.is_none() {
-                    return;
-                }
-                prompt_open = true;
-                let _ = webview.evaluate_script(SHOW_PROMPT_SCRIPT);
-            }
-            Event::UserEvent(AppEvent::EscapeCancel) => {
-                if !prompt_open {
-                    return;
-                }
-                prompt_open = false;
-                let _ = webview.evaluate_script(HIDE_PROMPT_SCRIPT);
-            }
-            Event::UserEvent(AppEvent::EscapeSubmit(pin)) => {
-                if !prompt_open {
-                    return;
-                }
-                let Some(expected) = escape_key.as_ref() else {
-                    return;
-                };
-                if pin == *expected {
-                    prompt_open = false;
-                    done = true;
-                    done_flag.store(true, Ordering::Relaxed);
-                    let _ = webview.evaluate_script(HIDE_PROMPT_SCRIPT);
-                    let _ = webview.evaluate_script(&overlay::set_timer_script("Unlocked"));
-                    *control_flow = ControlFlow::Wait;
-                } else {
-                    let _ = webview
-                        .evaluate_script(&overlay::set_prompt_message_script("Incorrect PIN"));
-                    let _ = webview.evaluate_script(CLEAR_PROMPT_SCRIPT);
-                }
-            }
-            _ => {}
+        *control_flow = ControlFlow::WaitUntil(state.next_tick());
+        let response = state.handle_event(&event);
+        if response.set_done_flag {
+            done_flag.store(true, Ordering::Relaxed);
+        }
+        for script in response.scripts {
+            let _ = webview.evaluate_script(script.as_str());
+        }
+        if let Some(control_flow_value) = response.control_flow {
+            *control_flow = control_flow_value;
         }
     });
 }
