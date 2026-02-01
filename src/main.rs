@@ -1,4 +1,3 @@
-use clap::Parser;
 use std::time::{Duration, Instant};
 use std::{
     io::{BufRead, BufReader},
@@ -6,8 +5,8 @@ use std::{
     path::PathBuf,
     process::Command,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread,
 };
@@ -15,9 +14,12 @@ use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::{Fullscreen, WindowBuilder};
-use url::Url;
 use wry::WebViewBuilderExtUnix;
 use wry::{PageLoadEvent, WebViewBuilder};
+
+mod config;
+
+use crate::config::Config;
 
 const OVERLAY_SCRIPT: &str = r#"
 (function () {
@@ -182,23 +184,6 @@ const OVERLAY_SCRIPT: &str = r#"
 })();
 "#;
 
-#[derive(Parser, Debug)]
-#[command(name = "focuslock")]
-#[command(about = "Fullscreen focus window with a timer overlay", long_about = None)]
-struct Args {
-    #[arg(long)]
-    url: String,
-
-    #[arg(long, default_value_t = 0)]
-    minutes: u64,
-
-    #[arg(long, default_value_t = 0)]
-    seconds: u64,
-
-    #[arg(long)]
-    escape_key: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 enum AppEvent {
     FocusLost,
@@ -206,14 +191,6 @@ enum AppEvent {
     EscapeOpen,
     EscapeCancel,
     EscapeSubmit(String),
-}
-
-fn parse_url(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|err| format!("Invalid URL: {err}"))?;
-    match url.scheme() {
-        "http" | "https" => Ok(url),
-        _ => Err("URL must start with http:// or https://".to_string()),
-    }
 }
 
 fn hyprland_socket_path() -> Option<PathBuf> {
@@ -421,23 +398,18 @@ fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool
 
 fn main() {
     gtk::init().expect("Failed to initialize GTK");
-    let args = Args::parse();
-    let escape_key = args
-        .escape_key
-        .or_else(|| std::env::var("FOCUSLOCK_ESCAPE_KEY").ok());
-    let total_seconds = args.minutes.saturating_mul(60).saturating_add(args.seconds);
-    if total_seconds == 0 {
-        eprintln!("total duration must be greater than 0 (use --minutes and/or --seconds)");
-        std::process::exit(2);
-    }
-
-    let url = match parse_url(&args.url) {
-        Ok(url) => url,
+    let config = match Config::from_args() {
+        Ok(config) => config,
         Err(err) => {
             eprintln!("{err}");
             std::process::exit(2);
         }
     };
+    let Config {
+        url,
+        total_seconds,
+        escape_key,
+    } = config;
     let target_url = url.as_str().to_string();
 
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
