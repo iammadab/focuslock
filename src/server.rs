@@ -1,3 +1,4 @@
+use std::net::TcpListener;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -9,14 +10,27 @@ use tiny_http::{Method, Response, Server, StatusCode};
 
 use crate::AppEvent;
 
-const DONE_ADDRESS: &str = "127.0.0.1:9742";
+const DONE_HOST: &str = "127.0.0.1";
+const DONE_PATH: &str = "/done";
+const DEFAULT_DONE_PORT: u16 = 9742;
 
-pub fn spawn_done_server(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>) {
+pub fn find_available_port(start_port: u16) -> u16 {
+    for port in start_port..=u16::MAX {
+        let addr = format!("{DONE_HOST}:{port}");
+        if TcpListener::bind(&addr).is_ok() {
+            return port;
+        }
+    }
+    DEFAULT_DONE_PORT
+}
+
+pub fn spawn_done_server(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>, port: u16) {
     thread::spawn(move || {
-        let server = match Server::http(DONE_ADDRESS) {
+        let address = format!("{DONE_HOST}:{port}");
+        let server = match Server::http(&address) {
             Ok(server) => server,
             Err(err) => {
-                eprintln!("Failed to start done server on {DONE_ADDRESS}: {err}");
+                eprintln!("Failed to start done server on {address}: {err}");
                 return;
             }
         };
@@ -25,7 +39,7 @@ pub fn spawn_done_server(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>)
             let method = request.method();
             let url = request.url();
 
-            if method == &Method::Post && url == "/done" {
+            if method == &Method::Post && url == DONE_PATH {
                 if done.load(Ordering::Relaxed) {
                     let _ = request.respond(Response::empty(StatusCode(409)));
                     continue;
@@ -36,7 +50,7 @@ pub fn spawn_done_server(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>)
                 continue;
             }
 
-            let status = if url == "/done" {
+            let status = if url == DONE_PATH {
                 StatusCode(405)
             } else {
                 StatusCode(404)

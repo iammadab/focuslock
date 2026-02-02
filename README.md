@@ -69,7 +69,12 @@ Why this exists:
 - It lets external tools or custom task trackers signal completion without relying solely on the timer.
 
 Endpoint:
-- `POST http://127.0.0.1:9742/done`
+- `POST http://127.0.0.1:<focuslock_port>/done`
+
+Port discovery:
+- Focuslock appends `focuslock_port` to the URL it loads.
+- The port starts at `9742` and increments until a free port is found.
+- External apps should read `focuslock_port` and call `http://127.0.0.1:<focuslock_port>/done`.
 
 Behavior:
 - Unlocks immediately (same as timer completion).
@@ -82,6 +87,11 @@ Responses:
 Example:
 ```bash
 curl -X POST http://127.0.0.1:9742/done
+```
+
+Example URL param:
+```text
+https://your-task.app/session/abc?focuslock_port=9742
 ```
 
 Note: this endpoint is bound to localhost. To trigger it from another device,
