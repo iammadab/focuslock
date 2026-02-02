@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 use tao::event_loop::ControlFlow;
@@ -9,11 +9,13 @@ mod config;
 mod controller;
 mod hyprland;
 mod overlay;
+mod server;
 mod webview;
 
 use crate::config::Config;
 use crate::controller::AppState;
 use crate::hyprland::{move_window_to_empty_workspace, spawn_hyprland_watchdog};
+use crate::server::spawn_done_server;
 use crate::webview::build_app_view;
 
 #[derive(Debug, Clone)]
@@ -23,6 +25,7 @@ pub enum AppEvent {
     EscapeOpen,
     EscapeCancel,
     EscapeSubmit(String),
+    ExternalDone,
 }
 
 fn main() {
@@ -51,6 +54,7 @@ fn main() {
 
     let done_flag = Arc::new(AtomicBool::new(false));
     spawn_hyprland_watchdog(proxy.clone(), done_flag.clone());
+    spawn_done_server(proxy.clone(), done_flag.clone());
 
     let total = Duration::from_secs(total_seconds);
     let mut state = AppState::new(total, escape_key);

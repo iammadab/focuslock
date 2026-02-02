@@ -188,6 +188,19 @@ impl AppState {
                     response.scripts.push(Script::Static(CLEAR_PROMPT_SCRIPT));
                 }
             }
+            Event::UserEvent(AppEvent::ExternalDone) => {
+                if self.done {
+                    return response;
+                }
+                self.prompt_open = false;
+                self.done = true;
+                response.set_done_flag = true;
+                response.scripts.push(Script::Static(HIDE_PROMPT_SCRIPT));
+                response
+                    .scripts
+                    .push(Script::Owned(set_timer_script("Unlocked")));
+                response.control_flow = Some(ControlFlow::Wait);
+            }
             _ => {}
         }
 
