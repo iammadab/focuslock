@@ -59,6 +59,34 @@ Environment:
 - Enter the PIN and press `Enter` to unlock.
 - Press `Esc` to cancel and return to focus mode.
 
+### External Done Trigger
+Focuslock exposes a local HTTP endpoint that can unlock the session.
+
+Use case:
+- For outcome-based focus sessions where time is not the only constraint (e.g., finish 10 puzzles, read 10 pages, complete a study milestone).
+
+Why this exists:
+- It lets external tools or custom task trackers signal completion without relying solely on the timer.
+
+Endpoint:
+- `POST http://127.0.0.1:9742/done`
+
+Behavior:
+- Unlocks immediately (same as timer completion).
+
+Responses:
+- `200 OK` when the session is marked done
+- `409 Conflict` if already done
+- `404` for unknown paths, `405` for wrong methods
+
+Example:
+```bash
+curl -X POST http://127.0.0.1:9742/done
+```
+
+Note: this endpoint is bound to localhost. To trigger it from another device,
+you would need to bind the server to a LAN address and allow the port in your firewall.
+
 ### Install as a CLI
 
 Local install:
