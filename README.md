@@ -94,6 +94,13 @@ Example URL param:
 https://your-task.app/session/abc?focuslock_port=9742
 ```
 
+#### Integration Notes
+- Read the `focuslock_port` query param from the URL Focuslock loads.
+- Build the endpoint as `http://127.0.0.1:<focuslock_port>/done`.
+- Send `POST` to that endpoint when the task is complete.
+- Treat `409 Conflict` as already-complete; retrying is safe but unnecessary.
+- This endpoint is localhost-only; it is meant for apps running inside the Focuslock webview.
+
 Note: this endpoint is bound to localhost. To trigger it from another device,
 you would need to bind the server to a LAN address and allow the port in your firewall.
 
