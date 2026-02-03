@@ -113,15 +113,6 @@ pub fn list_hyprland_clients() -> Vec<ClientInfo> {
     results
 }
 
-pub fn client_exists_by_address(address: &str) -> bool {
-    if address.trim().is_empty() {
-        return false;
-    }
-    list_hyprland_clients()
-        .into_iter()
-        .any(|client| client.address == address)
-}
-
 pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
     list_hyprland_clients()
         .into_iter()
@@ -483,6 +474,51 @@ pub fn spawn_hyprland_watchdog_address(
                 ])
                 .status();
             let _ = proxy.send_event(AppEvent::FocusLost);
+        }
+    });
+}
+
+pub fn spawn_hyprland_close_watcher(
+    proxy: EventLoopProxy<AppEvent>,
+    done: Arc<AtomicBool>,
+    address: Arc<std::sync::Mutex<String>>,
+) {
+    thread::spawn(move || {
+        let socket_path = match hyprland_socket_path() {
+            Some(path) => path,
+            None => return,
+        };
+        let stream = match UnixStream::connect(socket_path) {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+
+        let reader = BufReader::new(stream);
+        for line in reader.lines().flatten() {
+            if done.load(Ordering::Relaxed) {
+                break;
+            }
+            let line = line.trim();
+            if !line.starts_with("closewindow>>") {
+                continue;
+            }
+            let payload = &line["closewindow>>".len()..];
+            let closed_addr = payload.split(',').next().unwrap_or("");
+            if closed_addr.is_empty() {
+                continue;
+            }
+            let normalized_closed = if closed_addr.starts_with("0x") {
+                closed_addr.to_string()
+            } else {
+                format!("0x{closed_addr}")
+            };
+            let current_address = match address.lock() {
+                Ok(guard) => guard.clone(),
+                Err(_) => return,
+            };
+            if normalized_closed == current_address {
+                let _ = proxy.send_event(AppEvent::AppClosed(current_address));
+            }
         }
     });
 }

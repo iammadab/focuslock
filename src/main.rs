@@ -3,7 +3,6 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use tao::event::StartCause;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
 mod config;
@@ -17,9 +16,9 @@ mod webview;
 use crate::config::{Config, RunTarget};
 use crate::controller::AppState;
 use crate::hyprland::{
-    client_exists_by_address, focus_window_by_address, move_window_to_empty_workspace,
-    move_window_to_empty_workspace_by_address, resolve_app_window, spawn_hyprland_watchdog,
-    spawn_hyprland_watchdog_address,
+    focus_window_by_address, move_window_to_empty_workspace,
+    move_window_to_empty_workspace_by_address, resolve_app_window, spawn_hyprland_close_watcher,
+    spawn_hyprland_watchdog, spawn_hyprland_watchdog_address,
 };
 use crate::layer_overlay::build_layer_overlay;
 use crate::server::{find_available_port, spawn_done_server};
@@ -34,7 +33,7 @@ pub enum AppEvent {
     EscapeSubmit(String),
     ExternalDone,
     Tick,
-    FastTick,
+    AppClosed(String),
 }
 
 fn main() {
@@ -149,17 +148,6 @@ fn main() {
                     let _ = tick_proxy.send_event(AppEvent::Tick);
                 }
             });
-            let fast_done = done_flag.clone();
-            let fast_proxy = proxy.clone();
-            std::thread::spawn(move || {
-                while !fast_done.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(200));
-                    if fast_done.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let _ = fast_proxy.send_event(AppEvent::FastTick);
-                }
-            });
             let focus_done = done_flag.clone();
             let focus_address = address.clone();
             std::thread::spawn(move || {
@@ -176,8 +164,9 @@ fn main() {
                 }
             });
             let mut last_relaunch = Instant::now() - Duration::from_secs(1);
-            let relaunch_backoff = Duration::from_millis(200);
-            let mut missing_since: Option<Instant> = None;
+            let relaunch_backoff = Duration::from_millis(100);
+            let close_done = done_flag.clone();
+            spawn_hyprland_close_watcher(proxy.clone(), close_done, address.clone());
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Wait;
@@ -199,38 +188,17 @@ fn main() {
                     *control_flow = ControlFlow::Exit;
                 }
 
-                if !done_flag.load(Ordering::Relaxed)
-                    && matches!(
-                        event,
-                        tao::event::Event::NewEvents(StartCause::ResumeTimeReached { .. })
-                            | tao::event::Event::UserEvent(AppEvent::Tick)
-                            | tao::event::Event::UserEvent(AppEvent::FastTick)
-                    )
-                {
-                    let current_address = match address.lock() {
-                        Ok(guard) => guard.clone(),
-                        Err(_) => return,
-                    };
-                    let exists = client_exists_by_address(&current_address);
-                    if exists {
-                        missing_since = None;
-                    } else if missing_since.is_none() {
-                        missing_since = Some(Instant::now());
-                    }
-
-                    let missing_long_enough = missing_since
-                        .map(|since| since.elapsed() >= Duration::from_millis(200))
-                        .unwrap_or(false);
-
-                    if !exists && missing_long_enough && last_relaunch.elapsed() >= relaunch_backoff
-                    {
+                if !done_flag.load(Ordering::Relaxed) {
+                    if let tao::event::Event::UserEvent(AppEvent::AppClosed(_)) = event {
+                        if last_relaunch.elapsed() < relaunch_backoff {
+                            return;
+                        }
                         match launch_and_resolve(&app_cmd) {
                             Ok(client) => {
                                 move_window_to_empty_workspace_by_address(&client.address);
                                 if let Ok(mut guard) = address.lock() {
                                     *guard = client.address;
                                 }
-                                missing_since = None;
                                 last_relaunch = Instant::now();
                             }
                             Err(err) => {
