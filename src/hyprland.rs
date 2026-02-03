@@ -310,6 +310,50 @@ pub fn move_window_to_empty_workspace(pid: u32) {
         .status();
 }
 
+pub fn move_window_to_empty_workspace_by_address(address: &str) {
+    if let Some(monitor_name) = hyprland_active_monitor_name() {
+        let _ = Command::new("hyprctl")
+            .args(["dispatch", "focusmonitor", &monitor_name])
+            .status();
+    }
+
+    let workspace_id = match next_empty_workspace_id(2) {
+        Some(id) => id,
+        None => return,
+    };
+
+    let _ = Command::new("hyprctl")
+        .args(["dispatch", "workspace", &workspace_id.to_string()])
+        .status();
+
+    let target = format!("{workspace_id},address:{address}");
+    let moved = Command::new("hyprctl")
+        .args(["dispatch", "movetoworkspacesilent", &target])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    if !moved {
+        let _ = Command::new("hyprctl")
+            .args(["dispatch", "focuswindow", &format!("address:{address}")])
+            .status();
+        let _ = Command::new("hyprctl")
+            .args([
+                "dispatch",
+                "movetoworkspacesilent",
+                &workspace_id.to_string(),
+            ])
+            .status();
+    }
+
+    let _ = Command::new("hyprctl")
+        .args(["dispatch", "workspace", &workspace_id.to_string()])
+        .status();
+    let _ = Command::new("hyprctl")
+        .args(["dispatch", "focuswindow", &format!("address:{address}")])
+        .status();
+}
+
 pub fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>) {
     thread::spawn(move || {
         let socket_path = match hyprland_socket_path() {
@@ -368,6 +412,60 @@ pub fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<Atomic
                     "focuswindow",
                     &format!("address:{refocus_addr}"),
                 ])
+                .status();
+            let _ = proxy.send_event(AppEvent::FocusLost);
+        }
+    });
+}
+
+pub fn spawn_hyprland_watchdog_address(
+    proxy: EventLoopProxy<AppEvent>,
+    done: Arc<AtomicBool>,
+    address: String,
+) {
+    thread::spawn(move || {
+        let socket_path = match hyprland_socket_path() {
+            Some(path) => path,
+            None => return,
+        };
+        let stream = match UnixStream::connect(socket_path) {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+
+        let mut last_refocus = Instant::now() - Duration::from_secs(5);
+        let reader = BufReader::new(stream);
+
+        for line in reader.lines().flatten() {
+            if done.load(Ordering::Relaxed) {
+                break;
+            }
+            let line = line.trim();
+            if !line.starts_with("activewindowv2>>") {
+                continue;
+            }
+
+            let payload = &line["activewindowv2>>".len()..];
+            let active_addr = payload.split(',').next().unwrap_or("");
+            if active_addr.is_empty() {
+                continue;
+            }
+
+            if active_addr == address {
+                continue;
+            }
+
+            if last_refocus.elapsed() < Duration::from_millis(300) {
+                continue;
+            }
+            last_refocus = Instant::now();
+
+            if done.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let _ = Command::new("hyprctl")
+                .args(["dispatch", "focuswindow", &format!("address:{address}")])
                 .status();
             let _ = proxy.send_event(AppEvent::FocusLost);
         }
