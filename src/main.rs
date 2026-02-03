@@ -12,7 +12,7 @@ mod overlay;
 mod server;
 mod webview;
 
-use crate::config::Config;
+use crate::config::{Config, RunTarget};
 use crate::controller::AppState;
 use crate::hyprland::{move_window_to_empty_workspace, spawn_hyprland_watchdog};
 use crate::server::{find_available_port, spawn_done_server};
@@ -38,14 +38,23 @@ fn main() {
         }
     };
     let Config {
-        mut url,
+        target,
         total_seconds,
         escape_key,
     } = config;
-    let done_port = find_available_port(9742);
-    url.query_pairs_mut()
-        .append_pair("focuslock_port", &done_port.to_string());
-    let target_url = url.as_str().to_string();
+
+    let (target_url, done_port) = match target {
+        RunTarget::Web { mut url } => {
+            let done_port = find_available_port(9742);
+            url.query_pairs_mut()
+                .append_pair("focuslock_port", &done_port.to_string());
+            (url.as_str().to_string(), Some(done_port))
+        }
+        RunTarget::App { .. } => {
+            eprintln!("app mode is not implemented yet (v1)");
+            std::process::exit(2);
+        }
+    };
 
     let app_view = build_app_view(&target_url);
     let event_loop = app_view.event_loop;
@@ -57,7 +66,9 @@ fn main() {
 
     let done_flag = Arc::new(AtomicBool::new(false));
     spawn_hyprland_watchdog(proxy.clone(), done_flag.clone());
-    spawn_done_server(proxy.clone(), done_flag.clone(), done_port);
+    if let Some(done_port) = done_port {
+        spawn_done_server(proxy.clone(), done_flag.clone(), done_port);
+    }
 
     let total = Duration::from_secs(total_seconds);
     let mut state = AppState::new(total, escape_key);
