@@ -2,7 +2,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tao::event::StartCause;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
 mod config;
@@ -15,8 +16,9 @@ mod webview;
 use crate::config::{Config, RunTarget};
 use crate::controller::AppState;
 use crate::hyprland::{
-    move_window_to_empty_workspace, move_window_to_empty_workspace_by_address, resolve_app_window,
-    spawn_hyprland_watchdog, spawn_hyprland_watchdog_address,
+    client_exists_by_address, move_window_to_empty_workspace,
+    move_window_to_empty_workspace_by_address, resolve_app_window, spawn_hyprland_watchdog,
+    spawn_hyprland_watchdog_address,
 };
 use crate::server::{find_available_port, spawn_done_server};
 use crate::webview::build_app_view;
@@ -93,27 +95,24 @@ fn main() {
             let proxy = event_loop.create_proxy();
             let mut state = AppState::new(total, escape_key);
 
-            let child = std::process::Command::new("sh")
-                .args(["-lc", &format!("exec {app_cmd}")])
-                .spawn()
-                .map_err(|err| format!("Failed to launch app command: {err}"));
-
-            let child = match child {
-                Ok(child) => child,
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(2);
-                }
+            let app_class = app_class.clone();
+            let app_title = app_title.clone();
+            let app_timeout_ms = app_timeout_ms;
+            let launch_and_resolve = move |cmd: &str| {
+                let child = std::process::Command::new("sh")
+                    .args(["-lc", &format!("exec {cmd}")])
+                    .spawn()
+                    .map_err(|err| format!("Failed to launch app command: {err}"))?;
+                let pid = child.id();
+                resolve_app_window(
+                    pid,
+                    app_class.as_deref(),
+                    app_title.as_deref(),
+                    app_timeout_ms,
+                )
             };
 
-            let pid = child.id();
-            let resolved = resolve_app_window(
-                pid,
-                app_class.as_deref(),
-                app_title.as_deref(),
-                app_timeout_ms,
-            );
-            let resolved = match resolved {
+            let resolved = match launch_and_resolve(&app_cmd) {
                 Ok(client) => client,
                 Err(err) => {
                     eprintln!("{err}");
@@ -123,9 +122,12 @@ fn main() {
 
             move_window_to_empty_workspace_by_address(&resolved.address);
 
+            let address = Arc::new(std::sync::Mutex::new(resolved.address));
             let done_flag = Arc::new(AtomicBool::new(false));
-            spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), resolved.address);
+            spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
             let _ = proxy.send_event(AppEvent::PageLoaded);
+            let mut last_relaunch = Instant::now() - Duration::from_secs(1);
+            let relaunch_backoff = Duration::from_millis(400);
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::WaitUntil(state.next_tick());
@@ -138,6 +140,36 @@ fn main() {
                 }
                 if response.set_done_flag {
                     *control_flow = ControlFlow::Exit;
+                }
+
+                if !done_flag.load(Ordering::Relaxed) {
+                    if matches!(
+                        event,
+                        tao::event::Event::NewEvents(StartCause::ResumeTimeReached { .. })
+                    ) {
+                        let current_address = match address.lock() {
+                            Ok(guard) => guard.clone(),
+                            Err(_) => return,
+                        };
+                        if !client_exists_by_address(&current_address)
+                            && last_relaunch.elapsed() >= relaunch_backoff
+                        {
+                            match launch_and_resolve(&app_cmd) {
+                                Ok(client) => {
+                                    move_window_to_empty_workspace_by_address(&client.address);
+                                    if let Ok(mut guard) = address.lock() {
+                                        *guard = client.address;
+                                    }
+                                    last_relaunch = Instant::now();
+                                }
+                                Err(err) => {
+                                    eprintln!("{err}");
+                                    done_flag.store(true, Ordering::Relaxed);
+                                    *control_flow = ControlFlow::Exit;
+                                }
+                            }
+                        }
+                    }
                 }
             });
         }

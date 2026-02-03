@@ -113,6 +113,15 @@ pub fn list_hyprland_clients() -> Vec<ClientInfo> {
     results
 }
 
+pub fn client_exists_by_address(address: &str) -> bool {
+    if address.trim().is_empty() {
+        return false;
+    }
+    list_hyprland_clients()
+        .into_iter()
+        .any(|client| client.address == address)
+}
+
 pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
     list_hyprland_clients()
         .into_iter()
@@ -161,7 +170,6 @@ pub fn resolve_app_window(
 ) -> Result<ClientInfo, String> {
     let start = Instant::now();
     let timeout = Duration::from_millis(timeout_ms);
-    let mut last_clients = Vec::new();
     loop {
         if let Some(client) = find_client_by_pid(pid) {
             return Ok(client);
@@ -180,24 +188,22 @@ pub fn resolve_app_window(
         }
 
         if start.elapsed() >= timeout {
-            last_clients = list_hyprland_clients();
-            break;
+            let last_clients = list_hyprland_clients();
+            let mut message = String::from("no app window matched the launched process");
+            if !last_clients.is_empty() {
+                message.push_str("; recent clients: ");
+                let summaries: Vec<String> = last_clients
+                    .iter()
+                    .take(6)
+                    .map(format_client_summary)
+                    .collect();
+                message.push_str(&summaries.join(" | "));
+            }
+            return Err(message);
         }
 
         thread::sleep(Duration::from_millis(100));
     }
-
-    let mut message = String::from("no app window matched the launched process");
-    if !last_clients.is_empty() {
-        message.push_str("; recent clients: ");
-        let summaries: Vec<String> = last_clients
-            .iter()
-            .take(6)
-            .map(format_client_summary)
-            .collect();
-        message.push_str(&summaries.join(" | "));
-    }
-    Err(message)
 }
 
 fn hyprland_active_monitor_name() -> Option<String> {
@@ -421,7 +427,7 @@ pub fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<Atomic
 pub fn spawn_hyprland_watchdog_address(
     proxy: EventLoopProxy<AppEvent>,
     done: Arc<AtomicBool>,
-    address: String,
+    address: Arc<std::sync::Mutex<String>>,
 ) {
     thread::spawn(move || {
         let socket_path = match hyprland_socket_path() {
@@ -451,7 +457,12 @@ pub fn spawn_hyprland_watchdog_address(
                 continue;
             }
 
-            if active_addr == address {
+            let current_address = match address.lock() {
+                Ok(guard) => guard.clone(),
+                Err(_) => return,
+            };
+
+            if active_addr == current_address {
                 continue;
             }
 
@@ -465,7 +476,11 @@ pub fn spawn_hyprland_watchdog_address(
             }
 
             let _ = Command::new("hyprctl")
-                .args(["dispatch", "focuswindow", &format!("address:{address}")])
+                .args([
+                    "dispatch",
+                    "focuswindow",
+                    &format!("address:{current_address}"),
+                ])
                 .status();
             let _ = proxy.send_event(AppEvent::FocusLost);
         }
