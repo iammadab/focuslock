@@ -403,7 +403,7 @@ pub fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<Atomic
                 continue;
             };
 
-            if last_refocus.elapsed() < Duration::from_millis(300) {
+            if last_refocus.elapsed() < Duration::from_millis(100) {
                 continue;
             }
             last_refocus = Instant::now();
@@ -485,4 +485,13 @@ pub fn spawn_hyprland_watchdog_address(
             let _ = proxy.send_event(AppEvent::FocusLost);
         }
     });
+}
+
+pub fn focus_window_by_address(address: &str) {
+    if address.trim().is_empty() {
+        return;
+    }
+    let _ = Command::new("hyprctl")
+        .args(["dispatch", "focuswindow", &format!("address:{address}")])
+        .status();
 }
