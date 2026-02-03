@@ -1,3 +1,6 @@
+use signal_hook::consts::SIGUSR1;
+use signal_hook::iterator::Signals;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -31,9 +34,36 @@ pub enum AppEvent {
     EscapeOpen,
     EscapeCancel,
     EscapeSubmit(String),
+    HotkeyNotify,
     ExternalDone,
     Tick,
     AppClosed(String),
+}
+
+fn notify_hello() {
+    if let Err(err) = Command::new("notify-send").arg("hello").spawn() {
+        eprintln!("Failed to run notify-send: {err}");
+    }
+}
+
+fn run_hyprctl_keyword(args: &[&str]) {
+    match Command::new("hyprctl").args(args).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("hyprctl {:?} exited with {status}", args),
+        Err(err) => eprintln!("Failed to run hyprctl {:?}: {err}", args),
+    }
+}
+
+fn bind_session_hotkey() {
+    run_hyprctl_keyword(&[
+        "keyword",
+        "bind",
+        "CTRL SHIFT, Q, exec, pkill -USR1 focuslock",
+    ]);
+}
+
+fn unbind_session_hotkey() {
+    run_hyprctl_keyword(&["keyword", "unbind", "CTRL SHIFT, Q"]);
 }
 
 fn main() {
@@ -76,6 +106,9 @@ fn main() {
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::WaitUntil(state.next_tick());
+                if let tao::event::Event::UserEvent(AppEvent::HotkeyNotify) = event {
+                    notify_hello();
+                }
                 let response = state.handle_event(&event);
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
@@ -135,8 +168,39 @@ fn main() {
 
             let address = Arc::new(std::sync::Mutex::new(resolved.address));
             let done_flag = Arc::new(AtomicBool::new(false));
+            bind_session_hotkey();
+            let unbind_done = done_flag.clone();
+            std::thread::spawn(move || {
+                while !unbind_done.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                unbind_session_hotkey();
+            });
             spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
             let _ = proxy.send_event(AppEvent::PageLoaded);
+            let signal_done = done_flag.clone();
+            let signal_proxy = proxy.clone();
+            match Signals::new([SIGUSR1]) {
+                Ok(mut signals) => {
+                    let handle = signals.handle();
+                    let handle_done = done_flag.clone();
+                    std::thread::spawn(move || {
+                        while !handle_done.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        handle.close();
+                    });
+                    std::thread::spawn(move || {
+                        for _ in signals.forever() {
+                            if signal_done.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let _ = signal_proxy.send_event(AppEvent::HotkeyNotify);
+                        }
+                    });
+                }
+                Err(err) => eprintln!("Failed to register SIGUSR1 handler: {err}"),
+            }
             let tick_done = done_flag.clone();
             let tick_proxy = proxy.clone();
             std::thread::spawn(move || {
@@ -170,6 +234,9 @@ fn main() {
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Wait;
+                if let tao::event::Event::UserEvent(AppEvent::HotkeyNotify) = event {
+                    notify_hello();
+                }
                 let response = state.handle_event(&event);
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
