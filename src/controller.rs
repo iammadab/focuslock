@@ -28,7 +28,6 @@ pub struct ControllerResponse {
     pub scripts: Vec<Script>,
     pub set_done_flag: bool,
     pub timer_text: Option<String>,
-    pub notify_message: Option<String>,
     pub pin_mode_started: bool,
     pub pin_mode_ended: bool,
 }
@@ -74,7 +73,6 @@ impl AppState {
             scripts: Vec::new(),
             set_done_flag: false,
             timer_text: None,
-            notify_message: None,
             pin_mode_started: false,
             pin_mode_ended: false,
         };
@@ -196,10 +194,8 @@ impl AppState {
                     self.pin_buffer.clear();
                     self.done = true;
                     response.set_done_flag = true;
-                    response.notify_message = Some("Unlocked".to_string());
                     response.pin_mode_ended = true;
                 } else {
-                    response.notify_message = Some("Incorrect".to_string());
                     self.pin_active = false;
                     self.pin_buffer.clear();
                     response.pin_mode_ended = true;
@@ -210,7 +206,6 @@ impl AppState {
                 if !self.pin_active || self.done {
                     return response;
                 }
-                response.notify_message = Some("cancelled".to_string());
                 self.pin_active = false;
                 self.pin_buffer.clear();
                 response.pin_mode_ended = true;

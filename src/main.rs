@@ -45,12 +45,6 @@ pub enum AppEvent {
     AppClosed(String),
 }
 
-fn notify_message(message: &str) {
-    if let Err(err) = Command::new("notify-send").arg(message).spawn() {
-        eprintln!("Failed to run notify-send: {err}");
-    }
-}
-
 fn run_hyprctl_keyword(args: &[&str]) {
     match Command::new("hyprctl").args(args).status() {
         Ok(status) if status.success() => {}
@@ -183,9 +177,6 @@ fn main() {
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::WaitUntil(state.next_tick());
                 let response = state.handle_event(&event);
-                if let Some(message) = response.notify_message.as_deref() {
-                    notify_message(message);
-                }
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
                 }
@@ -352,9 +343,6 @@ fn main() {
                 }
                 if response.pin_mode_ended && rtmin > 0 {
                     reset_pin_submap();
-                }
-                if let Some(message) = response.notify_message.as_deref() {
-                    notify_message(message);
                 }
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
