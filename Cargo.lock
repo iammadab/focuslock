@@ -527,6 +527,7 @@ dependencies = [
  "clap",
  "gtk",
  "gtk-layer-shell",
+ "libc",
  "serde_json",
  "signal-hook",
  "tao",

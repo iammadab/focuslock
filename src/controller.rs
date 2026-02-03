@@ -28,6 +28,9 @@ pub struct ControllerResponse {
     pub scripts: Vec<Script>,
     pub set_done_flag: bool,
     pub timer_text: Option<String>,
+    pub notify_message: Option<String>,
+    pub pin_mode_started: bool,
+    pub pin_mode_ended: bool,
 }
 
 pub struct AppState {
@@ -40,6 +43,8 @@ pub struct AppState {
     prompt_open: bool,
     escape_key: Option<String>,
     reset_on_focus_loss: bool,
+    pin_active: bool,
+    pin_buffer: String,
 }
 
 impl AppState {
@@ -54,6 +59,8 @@ impl AppState {
             prompt_open: false,
             escape_key,
             reset_on_focus_loss,
+            pin_active: false,
+            pin_buffer: String::new(),
         }
     }
 
@@ -67,6 +74,9 @@ impl AppState {
             scripts: Vec::new(),
             set_done_flag: false,
             timer_text: None,
+            notify_message: None,
+            pin_mode_started: false,
+            pin_mode_ended: false,
         };
 
         match event {
@@ -146,6 +156,50 @@ impl AppState {
                     response.scripts.push(Script::Static(CLEAR_PROMPT_SCRIPT));
                 }
             }
+            Event::UserEvent(AppEvent::HotkeyNotify) => {
+                if self.done || self.pin_active {
+                    return response;
+                }
+                self.pin_active = true;
+                self.pin_buffer.clear();
+                response.pin_mode_started = true;
+                self.set_timer_text(&mut response, "Enter PIN");
+            }
+            Event::UserEvent(AppEvent::PinDigit(digit)) => {
+                if !self.pin_active || self.done {
+                    return response;
+                }
+                let digit = *digit;
+                if digit <= 9 {
+                    self.pin_buffer.push(char::from(b'0' + digit));
+                }
+                self.update_pin_text(&mut response);
+            }
+            Event::UserEvent(AppEvent::PinBackspace) => {
+                if !self.pin_active || self.done {
+                    return response;
+                }
+                self.pin_buffer.pop();
+                self.update_pin_text(&mut response);
+            }
+            Event::UserEvent(AppEvent::PinSubmit) => {
+                if !self.pin_active || self.done {
+                    return response;
+                }
+                response.notify_message = Some(self.pin_buffer.clone());
+                self.pin_active = false;
+                self.pin_buffer.clear();
+                response.pin_mode_ended = true;
+            }
+            Event::UserEvent(AppEvent::PinCancel) => {
+                if !self.pin_active || self.done {
+                    return response;
+                }
+                response.notify_message = Some("cancelled".to_string());
+                self.pin_active = false;
+                self.pin_buffer.clear();
+                response.pin_mode_ended = true;
+            }
             Event::UserEvent(AppEvent::ExternalDone) => {
                 if self.done {
                     return response;
@@ -170,6 +224,10 @@ impl AppState {
     }
 
     fn handle_tick(&mut self, now: Instant, response: &mut ControllerResponse) {
+        if self.pin_active {
+            self.next_tick = now + Duration::from_secs(1);
+            return;
+        }
         if self.done {
             response.control_flow = Some(ControlFlow::Wait);
             return;
@@ -217,5 +275,20 @@ impl AppState {
             .push(Script::Owned(set_timer_script(&text)));
         response.timer_text = Some(text);
         self.next_tick = now + Duration::from_secs(1);
+    }
+
+    fn set_timer_text(&self, response: &mut ControllerResponse, text: &str) {
+        response.scripts.push(Script::Owned(set_timer_script(text)));
+        response.timer_text = Some(text.to_string());
+    }
+
+    fn update_pin_text(&self, response: &mut ControllerResponse) {
+        let masked = "*".repeat(self.pin_buffer.len());
+        let text = if masked.is_empty() {
+            "PIN:".to_string()
+        } else {
+            format!("PIN: {masked}")
+        };
+        self.set_timer_text(response, &text);
     }
 }
