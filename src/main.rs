@@ -315,21 +315,7 @@ fn main() {
                     let _ = tick_proxy.send_event(AppEvent::Tick);
                 }
             });
-            let focus_done = done_flag.clone();
             let focus_address = address.clone();
-            std::thread::spawn(move || {
-                while !focus_done.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(200));
-                    if focus_done.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let current_address = match focus_address.lock() {
-                        Ok(guard) => guard.clone(),
-                        Err(_) => break,
-                    };
-                    focus_window_by_address(&current_address);
-                }
-            });
             let mut last_relaunch = Instant::now() - Duration::from_secs(1);
             let relaunch_backoff = Duration::from_millis(100);
             let close_done = done_flag.clone();
@@ -349,6 +335,11 @@ fn main() {
                     overlay.hide();
                     if rtmin > 0 {
                         reset_pin_submap();
+                    }
+                }
+                if let tao::event::Event::UserEvent(AppEvent::FocusLost) = event {
+                    if let Ok(guard) = focus_address.lock() {
+                        focus_window_by_address(&guard);
                     }
                 }
                 if let Some(timer_text) = response.timer_text.as_deref() {

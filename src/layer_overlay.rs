@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use gtk::{Align, Box as GtkBox, CssProvider, Label, Orientation, Window, WindowType, gdk};
+use gtk::{gdk, Align, Box as GtkBox, CssProvider, Label, Orientation, Window, WindowType};
 
 pub struct LayerOverlay {
     window: Window,
