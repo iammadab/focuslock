@@ -44,10 +44,6 @@ impl AppState {
         }
     }
 
-    pub fn next_tick(&self) -> Instant {
-        self.next_tick
-    }
-
     pub fn handle_event(&mut self, event: &Event<AppEvent>) -> ControllerResponse {
         let mut response = ControllerResponse {
             control_flow: None,
@@ -150,15 +146,6 @@ impl AppState {
                 self.pin_buffer.clear();
                 response.pin_mode_ended = true;
                 self.handle_tick(Instant::now(), &mut response);
-            }
-            Event::UserEvent(AppEvent::ExternalDone) => {
-                if self.done {
-                    return response;
-                }
-                self.done = true;
-                response.set_done_flag = true;
-                response.timer_text = Some("Unlocked".to_string());
-                response.control_flow = Some(ControlFlow::Wait);
             }
             Event::UserEvent(AppEvent::Tick) => {
                 self.handle_tick(Instant::now(), &mut response);

@@ -1,4 +1,4 @@
-use tao::event_loop::{EventLoop, EventLoopBuilder, EventLoopProxy};
+use tao::event_loop::{EventLoop, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::{Fullscreen, Window, WindowBuilder};
 use wry::WebViewBuilderExtUnix;
@@ -6,15 +6,17 @@ use wry::{PageLoadEvent, WebView, WebViewBuilder};
 
 use crate::AppEvent;
 
-pub struct AppView {
-    pub event_loop: EventLoop<AppEvent>,
+#[allow(dead_code)]
+pub struct WebViewHandle {
     pub window: Window,
     pub webview: WebView,
-    pub proxy: EventLoopProxy<AppEvent>,
 }
 
-pub fn build_app_view(target_url: &str) -> AppView {
-    let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
+pub fn build_webview(
+    event_loop: &EventLoop<AppEvent>,
+    proxy: &EventLoopProxy<AppEvent>,
+    target_url: &str,
+) -> Result<WebViewHandle, String> {
     let fullscreen = event_loop
         .primary_monitor()
         .map(|monitor| Fullscreen::Borderless(Some(monitor)));
@@ -33,7 +35,6 @@ pub fn build_app_view(target_url: &str) -> AppView {
     let vbox = window.default_vbox().expect("Failed to access gtk vbox");
     let builder = WebViewBuilder::new_gtk(vbox);
 
-    let proxy = event_loop.create_proxy();
     let loading_html = format!(
         r#"<!doctype html>
 <html>
@@ -74,12 +75,7 @@ pub fn build_app_view(target_url: &str) -> AppView {
             }
         })
         .build()
-        .expect("Failed to build webview");
+        .map_err(|err| format!("Failed to build webview: {err}"))?;
 
-    AppView {
-        event_loop,
-        window,
-        webview,
-        proxy,
-    }
+    Ok(WebViewHandle { window, webview })
 }

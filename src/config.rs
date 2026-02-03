@@ -11,12 +11,6 @@ struct Args {
     #[arg(long)]
     app_cmd: Option<String>,
 
-    #[arg(long)]
-    app_class: Option<String>,
-
-    #[arg(long)]
-    app_title: Option<String>,
-
     #[arg(long, default_value_t = 4000)]
     app_timeout_ms: u64,
 
@@ -44,8 +38,6 @@ pub enum RunTarget {
     },
     App {
         app_cmd: String,
-        app_class: Option<String>,
-        app_title: Option<String>,
         app_timeout_ms: u64,
     },
 }
@@ -70,8 +62,6 @@ impl Config {
             },
             (None, Some(app_cmd)) => RunTarget::App {
                 app_cmd,
-                app_class: args.app_class,
-                app_title: args.app_title,
                 app_timeout_ms: args.app_timeout_ms,
             },
             (None, None) => {
