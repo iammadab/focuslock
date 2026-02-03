@@ -39,6 +39,7 @@ pub struct AppState {
     next_tick: Instant,
     done: bool,
     flash_until: Option<Instant>,
+    pin_notice_until: Option<Instant>,
     prompt_open: bool,
     escape_key: Option<String>,
     reset_on_focus_loss: bool,
@@ -55,6 +56,7 @@ impl AppState {
             next_tick: Instant::now(),
             done: false,
             flash_until: None,
+            pin_notice_until: None,
             prompt_open: false,
             escape_key,
             reset_on_focus_loss,
@@ -198,6 +200,7 @@ impl AppState {
                 } else {
                     self.pin_active = false;
                     self.pin_buffer.clear();
+                    self.pin_notice_until = Some(Instant::now() + Duration::from_secs(1));
                     response.pin_mode_ended = true;
                     self.handle_tick(Instant::now(), &mut response);
                 }
@@ -238,6 +241,14 @@ impl AppState {
         if self.pin_active {
             self.next_tick = now + Duration::from_secs(1);
             return;
+        }
+        if let Some(until) = self.pin_notice_until {
+            if now < until {
+                self.set_timer_text(response, "Incorrect");
+                self.next_tick = now + Duration::from_millis(300);
+                return;
+            }
+            self.pin_notice_until = None;
         }
         if self.done {
             response.control_flow = Some(ControlFlow::Wait);
