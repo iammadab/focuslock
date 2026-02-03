@@ -4,7 +4,6 @@ use tao::window::{Fullscreen, Window, WindowBuilder};
 use wry::WebViewBuilderExtUnix;
 use wry::{PageLoadEvent, WebView, WebViewBuilder};
 
-use crate::overlay::OVERLAY_SCRIPT;
 use crate::AppEvent;
 
 pub struct AppView {
@@ -62,7 +61,6 @@ pub fn build_app_view(target_url: &str) -> AppView {
     );
     let webview = builder
         .with_html(loading_html)
-        .with_initialization_script(OVERLAY_SCRIPT)
         .with_background_color((15, 23, 42, 255))
         .with_on_page_load_handler({
             let proxy = proxy.clone();
@@ -72,19 +70,6 @@ pub fn build_app_view(target_url: &str) -> AppView {
                     && !current_url.starts_with("data:")
                 {
                     let _ = proxy.send_event(AppEvent::PageLoaded);
-                }
-            }
-        })
-        .with_ipc_handler({
-            let proxy = proxy.clone();
-            move |request| {
-                let body = request.body();
-                if body == "escape_open" {
-                    let _ = proxy.send_event(AppEvent::EscapeOpen);
-                } else if body == "escape_cancel" {
-                    let _ = proxy.send_event(AppEvent::EscapeCancel);
-                } else if let Some(pin) = body.strip_prefix("escape_submit:") {
-                    let _ = proxy.send_event(AppEvent::EscapeSubmit(pin.to_string()));
                 }
             }
         })

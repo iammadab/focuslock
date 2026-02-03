@@ -13,7 +13,6 @@ mod config;
 mod controller;
 mod hyprland;
 mod layer_overlay;
-mod overlay;
 mod server;
 mod webview;
 
@@ -32,9 +31,6 @@ use crate::webview::build_app_view;
 pub enum AppEvent {
     FocusLost,
     PageLoaded,
-    EscapeOpen,
-    EscapeCancel,
-    EscapeSubmit(String),
     HotkeyNotify,
     PinDigit(u8),
     PinBackspace,
@@ -163,28 +159,116 @@ fn main() {
             let app_view = build_app_view(&target_url);
             let event_loop = app_view.event_loop;
             let _window = app_view.window;
-            let webview = app_view.webview;
+            let _webview = app_view.webview;
             let proxy = app_view.proxy;
+            let overlay = match build_layer_overlay() {
+                Ok(overlay) => overlay,
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(2);
+                }
+            };
 
             move_window_to_empty_workspace(std::process::id());
 
             let done_flag = Arc::new(AtomicBool::new(false));
             spawn_hyprland_watchdog(proxy.clone(), done_flag.clone());
             spawn_done_server(proxy.clone(), done_flag.clone(), done_port);
+            let rtmin = match signal_rtmin() {
+                Some(value) => value,
+                None => {
+                    eprintln!("SIGRTMIN unavailable; PIN submap disabled");
+                    0
+                }
+            };
+            if rtmin > 0 {
+                unbind_pin_submap();
+                bind_pin_submap();
+            }
+            bind_session_hotkey();
+            let unbind_done = done_flag.clone();
+            let unbind_rtmin = rtmin;
+            std::thread::spawn(move || {
+                while !unbind_done.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                unbind_session_hotkey();
+                if unbind_rtmin > 0 {
+                    unbind_pin_submap();
+                }
+            });
+            let signal_done = done_flag.clone();
+            let signal_proxy = proxy.clone();
+            let mut signal_list = vec![SIGUSR1, SIGUSR2];
+            if rtmin > 0 {
+                for offset in 0..=11 {
+                    signal_list.push(rtmin + offset);
+                }
+            }
+            match Signals::new(signal_list) {
+                Ok(mut signals) => {
+                    let handle = signals.handle();
+                    let handle_done = done_flag.clone();
+                    std::thread::spawn(move || {
+                        while !handle_done.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        handle.close();
+                    });
+                    std::thread::spawn(move || {
+                        for signal in signals.forever() {
+                            if signal_done.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if signal == SIGUSR1 {
+                                let _ = signal_proxy.send_event(AppEvent::HotkeyNotify);
+                            } else if signal == SIGUSR2 {
+                                let _ = signal_proxy.send_event(AppEvent::PinCancel);
+                            } else if rtmin > 0 {
+                                let submit = pin_signal_submit(rtmin);
+                                let backspace = pin_signal_backspace(rtmin);
+                                if signal == submit {
+                                    let _ = signal_proxy.send_event(AppEvent::PinSubmit);
+                                } else if signal == backspace {
+                                    let _ = signal_proxy.send_event(AppEvent::PinBackspace);
+                                } else if signal >= rtmin && signal <= rtmin + 9 {
+                                    let digit = (signal - rtmin) as u8;
+                                    let _ = signal_proxy.send_event(AppEvent::PinDigit(digit));
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(err) => eprintln!("Failed to register signal handler: {err}"),
+            }
 
             let mut state = AppState::new(total, escape_key, true);
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::WaitUntil(state.next_tick());
                 let response = state.handle_event(&event);
-                if response.set_done_flag {
-                    done_flag.store(true, Ordering::Relaxed);
+                if response.pin_mode_started && rtmin > 0 {
+                    activate_pin_submap();
                 }
-                for script in response.scripts {
-                    let _ = webview.evaluate_script(script.as_str());
+                if response.pin_mode_ended && rtmin > 0 {
+                    reset_pin_submap();
+                }
+                if let Some(timer_text) = response.timer_text.as_deref() {
+                    overlay.set_timer_text(timer_text);
                 }
                 if let Some(control_flow_value) = response.control_flow {
                     *control_flow = control_flow_value;
+                }
+                while gtk::events_pending() {
+                    let _ = gtk::main_iteration_do(false);
+                }
+                if response.set_done_flag {
+                    done_flag.store(true, Ordering::Relaxed);
+                    overlay.hide();
+                    if rtmin > 0 {
+                        reset_pin_submap();
+                    }
+                    *control_flow = ControlFlow::Exit;
                 }
             });
         }

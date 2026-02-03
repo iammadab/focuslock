@@ -3,29 +3,10 @@ use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::ControlFlow;
 
-use crate::overlay::{
-    set_prompt_message_script, set_timer_script, CLEAR_PROMPT_SCRIPT, HIDE_PROMPT_SCRIPT,
-    SHOW_PROMPT_SCRIPT,
-};
 use crate::AppEvent;
-
-pub enum Script {
-    Static(&'static str),
-    Owned(String),
-}
-
-impl Script {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Script::Static(value) => value,
-            Script::Owned(value) => value.as_str(),
-        }
-    }
-}
 
 pub struct ControllerResponse {
     pub control_flow: Option<ControlFlow>,
-    pub scripts: Vec<Script>,
     pub set_done_flag: bool,
     pub timer_text: Option<String>,
     pub pin_mode_started: bool,
@@ -40,7 +21,6 @@ pub struct AppState {
     done: bool,
     flash_until: Option<Instant>,
     pin_notice_until: Option<Instant>,
-    prompt_open: bool,
     escape_key: Option<String>,
     reset_on_focus_loss: bool,
     pin_active: bool,
@@ -57,7 +37,6 @@ impl AppState {
             done: false,
             flash_until: None,
             pin_notice_until: None,
-            prompt_open: false,
             escape_key,
             reset_on_focus_loss,
             pin_active: false,
@@ -72,7 +51,6 @@ impl AppState {
     pub fn handle_event(&mut self, event: &Event<AppEvent>) -> ControllerResponse {
         let mut response = ControllerResponse {
             control_flow: None,
-            scripts: Vec::new(),
             set_done_flag: false,
             timer_text: None,
             pin_mode_started: false,
@@ -114,47 +92,6 @@ impl AppState {
                 self.loaded = true;
                 self.start = Some(now);
                 self.next_tick = now;
-            }
-            Event::UserEvent(AppEvent::EscapeOpen) => {
-                if self.done || self.prompt_open {
-                    return response;
-                }
-                if self.escape_key.is_none() {
-                    return response;
-                }
-                self.prompt_open = true;
-                response.scripts.push(Script::Static(SHOW_PROMPT_SCRIPT));
-            }
-            Event::UserEvent(AppEvent::EscapeCancel) => {
-                if !self.prompt_open {
-                    return response;
-                }
-                self.prompt_open = false;
-                response.scripts.push(Script::Static(HIDE_PROMPT_SCRIPT));
-            }
-            Event::UserEvent(AppEvent::EscapeSubmit(pin)) => {
-                if !self.prompt_open {
-                    return response;
-                }
-                let Some(expected) = self.escape_key.as_ref() else {
-                    return response;
-                };
-                if pin == expected {
-                    self.prompt_open = false;
-                    self.done = true;
-                    response.set_done_flag = true;
-                    response.scripts.push(Script::Static(HIDE_PROMPT_SCRIPT));
-                    response
-                        .scripts
-                        .push(Script::Owned(set_timer_script("Unlocked")));
-                    response.timer_text = Some("Unlocked".to_string());
-                    response.control_flow = Some(ControlFlow::Wait);
-                } else {
-                    response
-                        .scripts
-                        .push(Script::Owned(set_prompt_message_script("Incorrect PIN")));
-                    response.scripts.push(Script::Static(CLEAR_PROMPT_SCRIPT));
-                }
             }
             Event::UserEvent(AppEvent::HotkeyNotify) => {
                 if self.done || self.pin_active {
@@ -218,13 +155,8 @@ impl AppState {
                 if self.done {
                     return response;
                 }
-                self.prompt_open = false;
                 self.done = true;
                 response.set_done_flag = true;
-                response.scripts.push(Script::Static(HIDE_PROMPT_SCRIPT));
-                response
-                    .scripts
-                    .push(Script::Owned(set_timer_script("Unlocked")));
                 response.timer_text = Some("Unlocked".to_string());
                 response.control_flow = Some(ControlFlow::Wait);
             }
@@ -257,9 +189,6 @@ impl AppState {
 
         if self.start.is_none() {
             response.timer_text = Some("Loading".to_string());
-            response
-                .scripts
-                .push(Script::Owned(set_timer_script("Loading")));
             self.next_tick = now + Duration::from_millis(300);
             return;
         }
@@ -267,9 +196,6 @@ impl AppState {
         if let Some(until) = self.flash_until {
             if now < until {
                 response.timer_text = Some("Timer reset".to_string());
-                response
-                    .scripts
-                    .push(Script::Owned(set_timer_script("Timer reset")));
                 self.next_tick = now + Duration::from_millis(300);
                 return;
             }
@@ -281,9 +207,6 @@ impl AppState {
             self.done = true;
             response.set_done_flag = true;
             response.timer_text = Some("Done".to_string());
-            response
-                .scripts
-                .push(Script::Owned(set_timer_script("Done")));
             response.control_flow = Some(ControlFlow::Wait);
             return;
         }
@@ -292,15 +215,11 @@ impl AppState {
         let minutes = remaining_secs / 60;
         let seconds = remaining_secs % 60;
         let text = format!("{minutes:02}:{seconds:02}");
-        response
-            .scripts
-            .push(Script::Owned(set_timer_script(&text)));
         response.timer_text = Some(text);
         self.next_tick = now + Duration::from_secs(1);
     }
 
     fn set_timer_text(&self, response: &mut ControllerResponse, text: &str) {
-        response.scripts.push(Script::Owned(set_timer_script(text)));
         response.timer_text = Some(text.to_string());
     }
 
