@@ -252,6 +252,7 @@ fn main() {
                 }
             };
             if rtmin > 0 {
+                unbind_pin_submap();
                 bind_pin_submap();
             }
             bind_session_hotkey();

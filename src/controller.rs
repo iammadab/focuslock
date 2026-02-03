@@ -186,10 +186,25 @@ impl AppState {
                 if !self.pin_active || self.done {
                     return response;
                 }
-                response.notify_message = Some(self.pin_buffer.clone());
-                self.pin_active = false;
-                self.pin_buffer.clear();
-                response.pin_mode_ended = true;
+                let matches = self
+                    .escape_key
+                    .as_ref()
+                    .map(|key| key == &self.pin_buffer)
+                    .unwrap_or(false);
+                if matches {
+                    self.pin_active = false;
+                    self.pin_buffer.clear();
+                    self.done = true;
+                    response.set_done_flag = true;
+                    response.notify_message = Some("Unlocked".to_string());
+                    response.pin_mode_ended = true;
+                } else {
+                    response.notify_message = Some("Incorrect".to_string());
+                    self.pin_active = false;
+                    self.pin_buffer.clear();
+                    response.pin_mode_ended = true;
+                    self.handle_tick(Instant::now(), &mut response);
+                }
             }
             Event::UserEvent(AppEvent::PinCancel) => {
                 if !self.pin_active || self.done {
@@ -199,6 +214,7 @@ impl AppState {
                 self.pin_active = false;
                 self.pin_buffer.clear();
                 response.pin_mode_ended = true;
+                self.handle_tick(Instant::now(), &mut response);
             }
             Event::UserEvent(AppEvent::ExternalDone) => {
                 if self.done {
