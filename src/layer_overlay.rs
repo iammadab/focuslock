@@ -1,5 +1,5 @@
 use gtk::prelude::*;
-use gtk::{gdk, Align, Box as GtkBox, CssProvider, Label, Orientation, Window, WindowType};
+use gtk::{Align, Box as GtkBox, CssProvider, Label, Orientation, Window, WindowType, gdk};
 
 pub struct LayerOverlay {
     window: Window,
@@ -21,11 +21,10 @@ pub fn build_layer_overlay() -> Result<LayerOverlay, String> {
         return Err("gtk-layer-shell failed to initialize".to_string());
     }
     gtk_layer_shell::set_layer(&window, gtk_layer_shell::Layer::Overlay);
-    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Top, true);
+    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Bottom, true);
     gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Left, true);
-    gtk_layer_shell::set_anchor(&window, gtk_layer_shell::Edge::Right, true);
-    gtk_layer_shell::set_margin(&window, gtk_layer_shell::Edge::Top, 15);
-    gtk_layer_shell::set_margin(&window, gtk_layer_shell::Edge::Right, 15);
+    gtk_layer_shell::set_margin(&window, gtk_layer_shell::Edge::Bottom, 20);
+    gtk_layer_shell::set_margin(&window, gtk_layer_shell::Edge::Left, 5);
     gtk_layer_shell::set_exclusive_zone(&window, 0);
     gtk_layer_shell::set_keyboard_mode(&window, gtk_layer_shell::KeyboardMode::None);
     window.set_size_request(-1, 24);
