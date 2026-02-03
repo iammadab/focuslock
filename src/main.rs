@@ -178,6 +178,7 @@ fn main() {
                                 Err(err) => {
                                     eprintln!("{err}");
                                     done_flag.store(true, Ordering::Relaxed);
+                                    overlay.hide();
                                     *control_flow = ControlFlow::Exit;
                                 }
                             }

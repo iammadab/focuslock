@@ -20,6 +20,7 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
         .with_resizable(false)
         .with_always_on_top(true)
         .with_transparent(true)
+        .with_inner_size(PhysicalSize::new(160, 48))
         .build(event_loop)
         .expect("Failed to create overlay window");
 
@@ -49,23 +50,17 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
       .wrap {
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: center;
         height: 100%;
-        padding: 14px 18px;
+        padding: 10px 12px;
         box-sizing: border-box;
         background: rgba(15, 23, 42, 0.82);
         border: 1px solid rgba(148, 163, 184, 0.25);
-        border-radius: 12px;
+        border-radius: 10px;
         box-shadow: 0 12px 36px rgba(15, 23, 42, 0.3);
       }
-      .label {
-        font-size: 14px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: #94a3b8;
-      }
       .timer {
-        font-size: 32px;
+        font-size: 26px;
         font-weight: 600;
         letter-spacing: 0.08em;
       }
@@ -73,7 +68,6 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
   </head>
   <body>
     <div class="wrap">
-      <div class="label">Focuslock</div>
       <div class="timer" id="timer">00:00</div>
     </div>
     <script>
@@ -104,8 +98,8 @@ impl OverlayWindow {
     }
 
     pub fn set_position(&self, geometry: MonitorGeometry) {
-        let width = 200;
-        let height = 60;
+        let width = 160;
+        let height = 48;
         let margin = 16;
         let _ = geometry.height;
         let x = geometry.x + geometry.width - width - margin;
@@ -113,5 +107,9 @@ impl OverlayWindow {
         self.window
             .set_inner_size(PhysicalSize::new(width as u32, height as u32));
         self.window.set_outer_position(PhysicalPosition::new(x, y));
+    }
+
+    pub fn hide(&self) {
+        self.window.set_visible(false);
     }
 }
