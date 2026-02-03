@@ -12,3 +12,5 @@ gtk = "0.18"
 gtk-layer-shell = { version = "0.7", features = ["v0_5", "v0_6"] }
 serde_json = "1.0"
 tiny_http = "0.12"
+signal-hook = "0.3"
+libc = "0.2"

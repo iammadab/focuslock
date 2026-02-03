@@ -1,3 +1,7 @@
+use libc::SIGRTMIN;
+use signal_hook::consts::{SIGUSR1, SIGUSR2};
+use signal_hook::iterator::Signals;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -31,9 +35,105 @@ pub enum AppEvent {
     EscapeOpen,
     EscapeCancel,
     EscapeSubmit(String),
+    HotkeyNotify,
+    PinDigit(u8),
+    PinBackspace,
+    PinSubmit,
+    PinCancel,
     ExternalDone,
     Tick,
     AppClosed(String),
+}
+
+fn run_hyprctl_keyword(args: &[&str]) {
+    match Command::new("hyprctl").args(args).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("hyprctl {:?} exited with {status}", args),
+        Err(err) => eprintln!("Failed to run hyprctl {:?}: {err}", args),
+    }
+}
+
+fn bind_session_hotkey() {
+    run_hyprctl_keyword(&[
+        "keyword",
+        "bind",
+        "CTRL SHIFT, Q, exec, pkill -USR1 focuslock",
+    ]);
+}
+
+fn unbind_session_hotkey() {
+    run_hyprctl_keyword(&["keyword", "unbind", "CTRL SHIFT, Q"]);
+}
+
+fn signal_rtmin() -> Option<i32> {
+    let value = SIGRTMIN();
+    if value <= 0 {
+        return None;
+    }
+    Some(value)
+}
+
+fn pin_signal_submit(rtmin: i32) -> i32 {
+    rtmin + 10
+}
+
+fn pin_signal_backspace(rtmin: i32) -> i32 {
+    rtmin + 11
+}
+
+fn bind_pin_submap() {
+    run_hyprctl_keyword(&["keyword", "submap", "focuslock"]);
+    for digit in 0..=9u8 {
+        let bind = format!(" , {digit}, exec, pkill -SIGRTMIN+{digit} focuslock");
+        run_hyprctl_keyword(&["keyword", "bind", &bind]);
+    }
+    let submit_bind = " , Return, exec, pkill -SIGRTMIN+10 focuslock";
+    let submit_enter = " , Enter, exec, pkill -SIGRTMIN+10 focuslock";
+    let cancel_bind = " , Escape, exec, pkill -USR2 focuslock";
+    let backspace_bind = " , BackSpace, exec, pkill -SIGRTMIN+11 focuslock";
+    let backspace_alt = " , Backspace, exec, pkill -SIGRTMIN+11 focuslock";
+    run_hyprctl_keyword(&["keyword", "bind", submit_bind]);
+    run_hyprctl_keyword(&["keyword", "bind", submit_enter]);
+    run_hyprctl_keyword(&["keyword", "bind", cancel_bind]);
+    run_hyprctl_keyword(&["keyword", "bind", backspace_bind]);
+    run_hyprctl_keyword(&["keyword", "bind", backspace_alt]);
+    run_hyprctl_keyword(&["keyword", "submap", "reset"]);
+}
+
+fn unbind_pin_submap() {
+    run_hyprctl_keyword(&["keyword", "submap", "focuslock"]);
+    for digit in 0..=9u8 {
+        let bind = format!(" , {digit}");
+        run_hyprctl_keyword(&["keyword", "unbind", &bind]);
+    }
+    run_hyprctl_keyword(&["keyword", "unbind", " , Return"]);
+    run_hyprctl_keyword(&["keyword", "unbind", " , Enter"]);
+    run_hyprctl_keyword(&["keyword", "unbind", " , Escape"]);
+    run_hyprctl_keyword(&["keyword", "unbind", " , BackSpace"]);
+    run_hyprctl_keyword(&["keyword", "unbind", " , Backspace"]);
+    run_hyprctl_keyword(&["keyword", "submap", "reset"]);
+}
+
+fn activate_pin_submap() {
+    match Command::new("hyprctl")
+        .args(["dispatch", "submap", "focuslock"])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("hyprctl dispatch submap focuslock exited with {status}"),
+        Err(err) => eprintln!("Failed to dispatch submap focuslock: {err}"),
+    }
+}
+
+fn reset_pin_submap() {
+    match Command::new("hyprctl")
+        .args(["dispatch", "submap", "reset"])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("hyprctl dispatch submap reset exited with {status}"),
+        Err(err) => eprintln!("Failed to dispatch submap reset: {err}"),
+    }
 }
 
 fn main() {
@@ -135,8 +235,75 @@ fn main() {
 
             let address = Arc::new(std::sync::Mutex::new(resolved.address));
             let done_flag = Arc::new(AtomicBool::new(false));
+            let rtmin = match signal_rtmin() {
+                Some(value) => value,
+                None => {
+                    eprintln!("SIGRTMIN unavailable; PIN submap disabled");
+                    0
+                }
+            };
+            if rtmin > 0 {
+                unbind_pin_submap();
+                bind_pin_submap();
+            }
+            bind_session_hotkey();
+            let unbind_done = done_flag.clone();
+            let unbind_rtmin = rtmin;
+            std::thread::spawn(move || {
+                while !unbind_done.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                unbind_session_hotkey();
+                if unbind_rtmin > 0 {
+                    unbind_pin_submap();
+                }
+            });
             spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
             let _ = proxy.send_event(AppEvent::PageLoaded);
+            let signal_done = done_flag.clone();
+            let signal_proxy = proxy.clone();
+            let mut signal_list = vec![SIGUSR1, SIGUSR2];
+            if rtmin > 0 {
+                for offset in 0..=11 {
+                    signal_list.push(rtmin + offset);
+                }
+            }
+            match Signals::new(signal_list) {
+                Ok(mut signals) => {
+                    let handle = signals.handle();
+                    let handle_done = done_flag.clone();
+                    std::thread::spawn(move || {
+                        while !handle_done.load(Ordering::Relaxed) {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        handle.close();
+                    });
+                    std::thread::spawn(move || {
+                        for signal in signals.forever() {
+                            if signal_done.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            if signal == SIGUSR1 {
+                                let _ = signal_proxy.send_event(AppEvent::HotkeyNotify);
+                            } else if signal == SIGUSR2 {
+                                let _ = signal_proxy.send_event(AppEvent::PinCancel);
+                            } else if rtmin > 0 {
+                                let submit = pin_signal_submit(rtmin);
+                                let backspace = pin_signal_backspace(rtmin);
+                                if signal == submit {
+                                    let _ = signal_proxy.send_event(AppEvent::PinSubmit);
+                                } else if signal == backspace {
+                                    let _ = signal_proxy.send_event(AppEvent::PinBackspace);
+                                } else if signal >= rtmin && signal <= rtmin + 9 {
+                                    let digit = (signal - rtmin) as u8;
+                                    let _ = signal_proxy.send_event(AppEvent::PinDigit(digit));
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(err) => eprintln!("Failed to register signal handler: {err}"),
+            }
             let tick_done = done_flag.clone();
             let tick_proxy = proxy.clone();
             std::thread::spawn(move || {
@@ -171,9 +338,18 @@ fn main() {
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Wait;
                 let response = state.handle_event(&event);
+                if response.pin_mode_started && rtmin > 0 {
+                    activate_pin_submap();
+                }
+                if response.pin_mode_ended && rtmin > 0 {
+                    reset_pin_submap();
+                }
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
                     overlay.hide();
+                    if rtmin > 0 {
+                        reset_pin_submap();
+                    }
                 }
                 if let Some(timer_text) = response.timer_text.as_deref() {
                     overlay.set_timer_text(timer_text);
