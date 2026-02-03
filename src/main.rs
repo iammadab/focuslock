@@ -10,18 +10,16 @@ mod config;
 mod controller;
 mod hyprland;
 mod overlay;
-mod overlay_window;
 mod server;
 mod webview;
 
 use crate::config::{Config, RunTarget};
 use crate::controller::AppState;
 use crate::hyprland::{
-    active_monitor_geometry, client_exists_by_address, move_window_to_empty_workspace,
+    client_exists_by_address, move_window_to_empty_workspace,
     move_window_to_empty_workspace_by_address, resolve_app_window, spawn_hyprland_watchdog,
     spawn_hyprland_watchdog_address,
 };
-use crate::overlay_window::build_overlay_window;
 use crate::server::{find_available_port, spawn_done_server};
 use crate::webview::build_app_view;
 
@@ -93,11 +91,9 @@ fn main() {
             app_title,
             app_timeout_ms,
         } => {
-            gtk::init().expect("Failed to initialize GTK");
             let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
             let proxy = event_loop.create_proxy();
             let mut state = AppState::new(total, escape_key);
-            let overlay = build_overlay_window(&event_loop);
 
             let app_class = app_class.clone();
             let app_title = app_title.clone();
@@ -125,9 +121,6 @@ fn main() {
             };
 
             move_window_to_empty_workspace_by_address(&resolved.address);
-            if let Some(geometry) = active_monitor_geometry() {
-                overlay.set_position(geometry);
-            }
 
             let address = Arc::new(std::sync::Mutex::new(resolved.address));
             let done_flag = Arc::new(AtomicBool::new(false));
@@ -141,9 +134,6 @@ fn main() {
                 let response = state.handle_event(&event);
                 if response.set_done_flag {
                     done_flag.store(true, Ordering::Relaxed);
-                }
-                if let Some(timer_text) = response.timer_text.as_deref() {
-                    overlay.set_timer_text(timer_text);
                 }
                 if let Some(control_flow_value) = response.control_flow {
                     *control_flow = control_flow_value;
@@ -167,9 +157,6 @@ fn main() {
                             match launch_and_resolve(&app_cmd) {
                                 Ok(client) => {
                                     move_window_to_empty_workspace_by_address(&client.address);
-                                    if let Some(geometry) = active_monitor_geometry() {
-                                        overlay.set_position(geometry);
-                                    }
                                     if let Ok(mut guard) = address.lock() {
                                         *guard = client.address;
                                     }
@@ -178,7 +165,6 @@ fn main() {
                                 Err(err) => {
                                     eprintln!("{err}");
                                     done_flag.store(true, Ordering::Relaxed);
-                                    overlay.hide();
                                     *control_flow = ControlFlow::Exit;
                                 }
                             }
