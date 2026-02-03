@@ -14,6 +14,14 @@ use tao::event_loop::EventLoopProxy;
 
 use crate::AppEvent;
 
+#[derive(Debug, Clone)]
+pub struct ClientInfo {
+    pub pid: u32,
+    pub class: String,
+    pub title: String,
+    pub address: String,
+}
+
 fn hyprland_socket_path() -> Option<PathBuf> {
     let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok()?;
@@ -44,6 +52,152 @@ fn find_hyprland_address(pid: u32) -> Option<String> {
         }
     }
     None
+}
+
+pub fn list_hyprland_clients() -> Vec<ClientInfo> {
+    let output = Command::new("hyprctl").args(["-j", "clients"]).output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let value: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let clients = match value.as_array() {
+        Some(clients) => clients,
+        None => return Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for client in clients {
+        let pid = client.get("pid").and_then(|pid| pid.as_u64()).unwrap_or(0) as u32;
+        let address = client
+            .get("address")
+            .and_then(|addr| addr.as_str())
+            .unwrap_or("")
+            .to_string();
+        let class = client
+            .get("class")
+            .and_then(|class| class.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                client
+                    .get("initialClass")
+                    .and_then(|class| class.as_str())
+                    .filter(|value| !value.trim().is_empty())
+            })
+            .unwrap_or("")
+            .to_string();
+        let title = client
+            .get("title")
+            .and_then(|title| title.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if pid == 0 || address.is_empty() {
+            continue;
+        }
+
+        results.push(ClientInfo {
+            pid,
+            class,
+            title,
+            address,
+        });
+    }
+
+    results
+}
+
+pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
+    list_hyprland_clients()
+        .into_iter()
+        .find(|client| client.pid == pid)
+}
+
+pub fn find_client_by_class(class: &str) -> Option<ClientInfo> {
+    let target = class.trim().to_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    list_hyprland_clients()
+        .into_iter()
+        .find(|client| !client.class.is_empty() && client.class.to_lowercase() == target)
+}
+
+pub fn find_client_by_title_contains(title: &str) -> Option<ClientInfo> {
+    let target = title.trim().to_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    list_hyprland_clients()
+        .into_iter()
+        .find(|client| !client.title.is_empty() && client.title.to_lowercase().contains(&target))
+}
+
+fn format_client_summary(client: &ClientInfo) -> String {
+    let class = if client.class.is_empty() {
+        "<none>"
+    } else {
+        client.class.as_str()
+    };
+    let title = if client.title.is_empty() {
+        "<none>"
+    } else {
+        client.title.as_str()
+    };
+    format!("pid={} class={} title={}", client.pid, class, title)
+}
+
+pub fn resolve_app_window(
+    pid: u32,
+    app_class: Option<&str>,
+    app_title: Option<&str>,
+    timeout_ms: u64,
+) -> Result<ClientInfo, String> {
+    let start = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms);
+    let mut last_clients = Vec::new();
+    loop {
+        if let Some(client) = find_client_by_pid(pid) {
+            return Ok(client);
+        }
+
+        if let Some(class) = app_class {
+            if let Some(client) = find_client_by_class(class) {
+                return Ok(client);
+            }
+        }
+
+        if let Some(title) = app_title {
+            if let Some(client) = find_client_by_title_contains(title) {
+                return Ok(client);
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            last_clients = list_hyprland_clients();
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let mut message = String::from("no app window matched the launched process");
+    if !last_clients.is_empty() {
+        message.push_str("; recent clients: ");
+        let summaries: Vec<String> = last_clients
+            .iter()
+            .take(6)
+            .map(format_client_summary)
+            .collect();
+        message.push_str(&summaries.join(" | "));
+    }
+    Err(message)
 }
 
 fn hyprland_active_monitor_name() -> Option<String> {
