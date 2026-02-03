@@ -10,6 +10,7 @@ mod config;
 mod controller;
 mod hyprland;
 mod overlay;
+mod overlay_window;
 mod server;
 mod webview;
 
@@ -20,6 +21,7 @@ use crate::hyprland::{
     move_window_to_empty_workspace_by_address, resolve_app_window, spawn_hyprland_watchdog,
     spawn_hyprland_watchdog_address,
 };
+use crate::overlay_window::build_overlay_window;
 use crate::server::{find_available_port, spawn_done_server};
 use crate::webview::build_app_view;
 
@@ -91,9 +93,11 @@ fn main() {
             app_title,
             app_timeout_ms,
         } => {
+            gtk::init().expect("Failed to initialize GTK");
             let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
             let proxy = event_loop.create_proxy();
             let mut state = AppState::new(total, escape_key);
+            let _overlay = build_overlay_window(&event_loop);
 
             let app_class = app_class.clone();
             let app_title = app_title.clone();
