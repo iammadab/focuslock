@@ -1,10 +1,11 @@
-use tao::dpi::LogicalSize;
+use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event_loop::EventLoop;
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
 use wry::WebViewBuilderExtUnix;
 use wry::{WebView, WebViewBuilder};
 
+use crate::hyprland::MonitorGeometry;
 use crate::AppEvent;
 
 pub struct OverlayWindow {
@@ -18,9 +19,11 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
         .with_decorations(false)
         .with_resizable(false)
         .with_always_on_top(true)
-        .with_inner_size(LogicalSize::new(420.0, 80.0))
+        .with_transparent(true)
         .build(event_loop)
         .expect("Failed to create overlay window");
+
+    let _ = window.set_ignore_cursor_events(true);
 
     let vbox = window.default_vbox().expect("Failed to access gtk vbox");
     let webview = WebViewBuilder::new_gtk(vbox)
@@ -39,7 +42,7 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
         padding: 0;
         width: 100%;
         height: 100%;
-        background: #0b1221;
+        background: transparent;
         color: #e2e8f0;
         font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
       }
@@ -50,6 +53,10 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
         height: 100%;
         padding: 14px 18px;
         box-sizing: border-box;
+        background: rgba(15, 23, 42, 0.82);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 12px;
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.3);
       }
       .label {
         font-size: 14px;
@@ -67,13 +74,44 @@ pub fn build_overlay_window(event_loop: &EventLoop<AppEvent>) -> OverlayWindow {
   <body>
     <div class="wrap">
       <div class="label">Focuslock</div>
-      <div class="timer">00:00</div>
+      <div class="timer" id="timer">00:00</div>
     </div>
+    <script>
+      window.setTimerText = function (value) {
+        var el = document.getElementById('timer');
+        if (el) {
+          el.textContent = value;
+        }
+      };
+    </script>
   </body>
 </html>"#,
         )
+        .with_background_color((0, 0, 0, 0))
         .build()
         .expect("Failed to build overlay webview");
 
     OverlayWindow { window, webview }
+}
+
+impl OverlayWindow {
+    pub fn set_timer_text(&self, text: &str) {
+        let script = format!(
+            "window.setTimerText && window.setTimerText({text:?});",
+            text = text
+        );
+        let _ = self.webview.evaluate_script(&script);
+    }
+
+    pub fn set_position(&self, geometry: MonitorGeometry) {
+        let width = 200;
+        let height = 60;
+        let margin = 16;
+        let _ = geometry.height;
+        let x = geometry.x + geometry.width - width - margin;
+        let y = geometry.y + margin;
+        self.window
+            .set_inner_size(PhysicalSize::new(width as u32, height as u32));
+        self.window.set_outer_position(PhysicalPosition::new(x, y));
+    }
 }

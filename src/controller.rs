@@ -27,6 +27,7 @@ pub struct ControllerResponse {
     pub control_flow: Option<ControlFlow>,
     pub scripts: Vec<Script>,
     pub set_done_flag: bool,
+    pub timer_text: Option<String>,
 }
 
 pub struct AppState {
@@ -63,6 +64,7 @@ impl AppState {
             control_flow: None,
             scripts: Vec::new(),
             set_done_flag: false,
+            timer_text: None,
         };
 
         match event {
@@ -77,6 +79,7 @@ impl AppState {
 
                 let now = Instant::now();
                 if self.start.is_none() {
+                    response.timer_text = Some("Loading".to_string());
                     response
                         .scripts
                         .push(Script::Owned(set_timer_script("Loading")));
@@ -86,6 +89,7 @@ impl AppState {
 
                 if let Some(until) = self.flash_until {
                     if now < until {
+                        response.timer_text = Some("Timer reset".to_string());
                         response
                             .scripts
                             .push(Script::Owned(set_timer_script("Timer reset")));
@@ -99,6 +103,7 @@ impl AppState {
                 if remaining.is_zero() {
                     self.done = true;
                     response.set_done_flag = true;
+                    response.timer_text = Some("Done".to_string());
                     response
                         .scripts
                         .push(Script::Owned(set_timer_script("Done")));
@@ -120,6 +125,7 @@ impl AppState {
                 response
                     .scripts
                     .push(Script::Owned(set_timer_script(&text)));
+                response.timer_text = Some(text);
                 self.next_tick = now + Duration::from_secs(1);
             }
             Event::WindowEvent {
@@ -180,6 +186,7 @@ impl AppState {
                     response
                         .scripts
                         .push(Script::Owned(set_timer_script("Unlocked")));
+                    response.timer_text = Some("Unlocked".to_string());
                     response.control_flow = Some(ControlFlow::Wait);
                 } else {
                     response
@@ -199,6 +206,7 @@ impl AppState {
                 response
                     .scripts
                     .push(Script::Owned(set_timer_script("Unlocked")));
+                response.timer_text = Some("Unlocked".to_string());
                 response.control_flow = Some(ControlFlow::Wait);
             }
             _ => {}

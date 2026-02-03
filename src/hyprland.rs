@@ -22,6 +22,14 @@ pub struct ClientInfo {
     pub address: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MonitorGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
 fn hyprland_socket_path() -> Option<PathBuf> {
     let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok()?;
@@ -225,6 +233,36 @@ fn hyprland_active_monitor_name() -> Option<String> {
                 .and_then(|name| name.as_str())
                 .map(|name| name.to_string());
         }
+    }
+    None
+}
+
+pub fn active_monitor_geometry() -> Option<MonitorGeometry> {
+    let output = Command::new("hyprctl")
+        .args(["-j", "monitors"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let monitors = value.as_array()?;
+    for monitor in monitors {
+        let focused = monitor.get("focused")?.as_bool()?;
+        if !focused {
+            continue;
+        }
+        let x = monitor.get("x")?.as_i64()? as i32;
+        let y = monitor.get("y")?.as_i64()? as i32;
+        let width = monitor.get("width")?.as_i64()? as i32;
+        let height = monitor.get("height")?.as_i64()? as i32;
+        return Some(MonitorGeometry {
+            x,
+            y,
+            width,
+            height,
+        });
     }
     None
 }
