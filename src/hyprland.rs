@@ -385,7 +385,7 @@ pub fn spawn_hyprland_watchdog_address(
                 continue;
             }
 
-            if last_refocus.elapsed() < Duration::from_millis(300) {
+            if last_refocus.elapsed() < Duration::from_millis(50) {
                 continue;
             }
             last_refocus = Instant::now();
