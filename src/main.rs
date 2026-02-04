@@ -144,8 +144,6 @@ fn main() {
     match target {
         RunTarget::App {
             app_cmd,
-            app_class,
-            app_title,
             app_timeout_ms,
         } => {
             gtk::init().expect("Failed to initialize GTK");
@@ -160,8 +158,6 @@ fn main() {
                 }
             };
 
-            let app_class = app_class.clone();
-            let app_title = app_title.clone();
             let app_timeout_ms = app_timeout_ms;
             let launch_and_resolve = move |cmd: &str| {
                 let child = std::process::Command::new("sh")
@@ -169,12 +165,7 @@ fn main() {
                     .spawn()
                     .map_err(|err| format!("Failed to launch app command: {err}"))?;
                 let pid = child.id();
-                resolve_app_window(
-                    pid,
-                    app_class.as_deref(),
-                    app_title.as_deref(),
-                    app_timeout_ms,
-                )
+                resolve_app_window(pid, app_timeout_ms)
             };
 
             let resolved = match launch_and_resolve(&app_cmd) {
