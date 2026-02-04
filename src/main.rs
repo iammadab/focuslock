@@ -7,6 +7,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
+use std::{env, fs, path::PathBuf};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
 mod config;
@@ -125,6 +126,35 @@ fn reset_pin_submap() {
     }
 }
 
+fn focuslock_profile_dir() -> Result<PathBuf, String> {
+    let base = if let Ok(value) = env::var("XDG_DATA_HOME") {
+        PathBuf::from(value)
+    } else if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home).join(".local").join("share")
+    } else {
+        return Err("Missing XDG_DATA_HOME or HOME for profile directory".to_string());
+    };
+    Ok(base.join("focuslock").join("profile"))
+}
+
+fn ensure_profile_dir() -> Result<PathBuf, String> {
+    let dir = focuslock_profile_dir()?;
+    fs::create_dir_all(&dir).map_err(|err| {
+        format!(
+            "Failed to create focuslock profile dir {}: {err}",
+            dir.display()
+        )
+    })?;
+    Ok(dir)
+}
+
+fn append_user_data_dir(cmd: &str, profile_dir: &PathBuf) -> String {
+    if cmd.contains("--user-data-dir") {
+        return cmd.to_string();
+    }
+    format!("{cmd} --user-data-dir=\"{}\"", profile_dir.display())
+}
+
 fn main() {
     let config = match Config::from_args() {
         Ok(config) => config,
@@ -146,6 +176,14 @@ fn main() {
             app_cmd,
             app_timeout_ms,
         } => {
+            let profile_dir = match ensure_profile_dir() {
+                Ok(dir) => dir,
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(2);
+                }
+            };
+            let app_cmd = append_user_data_dir(&app_cmd, &profile_dir);
             gtk::init().expect("Failed to initialize GTK");
             let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
             let proxy = event_loop.create_proxy();

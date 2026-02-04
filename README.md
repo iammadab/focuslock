@@ -57,6 +57,7 @@ Environment:
 ### Notes
 - `--url` is intentionally removed for now; we can reintroduce it later as a convenience alias that expands to `--app-cmd "omarchy-launch-webapp <url>"` once the app-cmd flow is validated.
 - Hyprland watchdog refocuses and resets on focus loss (deterrent, not a hard lock).
+- Focuslock always appends `--user-data-dir` to the app command, using `~/.local/share/focuslock/profile` (or `$XDG_DATA_HOME/focuslock/profile`) for a persistent profile.
 
 ### Install as a CLI
 
