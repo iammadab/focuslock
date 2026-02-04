@@ -386,6 +386,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tao",
+ "url",
 ]
 
 [[package]]

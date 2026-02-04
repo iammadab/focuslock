@@ -148,11 +148,11 @@ fn ensure_profile_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn append_user_data_dir(cmd: &str, profile_dir: &PathBuf) -> String {
-    if cmd.contains("--user-data-dir") {
-        return cmd.to_string();
-    }
-    format!("{cmd} --user-data-dir=\"{}\"", profile_dir.display())
+fn chromium_app_command(url: &str, profile_dir: &PathBuf) -> String {
+    format!(
+        "chromium --app=\"{url}\" --user-data-dir=\"{}\"",
+        profile_dir.display()
+    )
 }
 
 fn main() {
@@ -172,8 +172,8 @@ fn main() {
     let total = Duration::from_secs(total_seconds);
 
     match target {
-        RunTarget::App {
-            app_cmd,
+        RunTarget::Web {
+            url,
             app_timeout_ms,
         } => {
             let profile_dir = match ensure_profile_dir() {
@@ -183,185 +183,199 @@ fn main() {
                     std::process::exit(2);
                 }
             };
-            let app_cmd = append_user_data_dir(&app_cmd, &profile_dir);
-            gtk::init().expect("Failed to initialize GTK");
-            let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
-            let proxy = event_loop.create_proxy();
-            let mut state = AppState::new(total, escape_key, false);
-            let overlay = match build_layer_overlay() {
-                Ok(overlay) => overlay,
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(2);
-                }
-            };
+            let app_cmd = chromium_app_command(url.as_str(), &profile_dir);
+            run_app_session(total, escape_key, app_cmd, app_timeout_ms);
+        }
+        RunTarget::App {
+            app_cmd,
+            app_timeout_ms,
+        } => {
+            run_app_session(total, escape_key, app_cmd, app_timeout_ms);
+        }
+    };
+}
 
-            let app_timeout_ms = app_timeout_ms;
-            let launch_and_resolve = move |cmd: &str| {
-                let child = std::process::Command::new("sh")
-                    .args(["-lc", &format!("exec {cmd}")])
-                    .spawn()
-                    .map_err(|err| format!("Failed to launch app command: {err}"))?;
-                let pid = child.id();
-                resolve_app_window(pid, app_timeout_ms)
-            };
+fn run_app_session(
+    total: Duration,
+    escape_key: Option<String>,
+    app_cmd: String,
+    app_timeout_ms: u64,
+) {
+    gtk::init().expect("Failed to initialize GTK");
+    let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let mut state = AppState::new(total, escape_key, false);
+    let overlay = match build_layer_overlay() {
+        Ok(overlay) => overlay,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    };
 
-            let resolved = match launch_and_resolve(&app_cmd) {
-                Ok(client) => client,
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(2);
-                }
-            };
+    let launch_and_resolve = move |cmd: &str| {
+        let child = std::process::Command::new("sh")
+            .args(["-lc", &format!("exec {cmd}")])
+            .spawn()
+            .map_err(|err| format!("Failed to launch app command: {err}"))?;
+        let pid = child.id();
+        resolve_app_window(pid, app_timeout_ms)
+    };
 
-            state.mark_loaded();
+    let resolved = match launch_and_resolve(&app_cmd) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(2);
+        }
+    };
 
-            move_window_to_empty_workspace_by_address(&resolved.address);
+    state.mark_loaded();
 
-            let address = Arc::new(std::sync::Mutex::new(resolved.address));
-            let done_flag = Arc::new(AtomicBool::new(false));
-            let rtmin = match signal_rtmin() {
-                Some(value) => value,
-                None => {
-                    eprintln!("SIGRTMIN unavailable; PIN submap disabled");
-                    0
-                }
-            };
-            if rtmin > 0 {
-                unbind_pin_submap();
-                bind_pin_submap();
-            }
-            bind_session_hotkey();
-            let unbind_done = done_flag.clone();
-            let unbind_rtmin = rtmin;
+    move_window_to_empty_workspace_by_address(&resolved.address);
+
+    let address = Arc::new(std::sync::Mutex::new(resolved.address));
+    let done_flag = Arc::new(AtomicBool::new(false));
+    let rtmin = match signal_rtmin() {
+        Some(value) => value,
+        None => {
+            eprintln!("SIGRTMIN unavailable; PIN submap disabled");
+            0
+        }
+    };
+    if rtmin > 0 {
+        unbind_pin_submap();
+        bind_pin_submap();
+    }
+    bind_session_hotkey();
+    let unbind_done = done_flag.clone();
+    let unbind_rtmin = rtmin;
+    std::thread::spawn(move || {
+        while !unbind_done.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        unbind_session_hotkey();
+        if unbind_rtmin > 0 {
+            unbind_pin_submap();
+        }
+    });
+    spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
+    let signal_done = done_flag.clone();
+    let signal_proxy = proxy.clone();
+    let mut signal_list = vec![SIGUSR1, SIGUSR2];
+    if rtmin > 0 {
+        for offset in 0..=11 {
+            signal_list.push(rtmin + offset);
+        }
+    }
+    match Signals::new(signal_list) {
+        Ok(mut signals) => {
+            let handle = signals.handle();
+            let handle_done = done_flag.clone();
             std::thread::spawn(move || {
-                while !unbind_done.load(Ordering::Relaxed) {
+                while !handle_done.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(200));
                 }
-                unbind_session_hotkey();
-                if unbind_rtmin > 0 {
-                    unbind_pin_submap();
-                }
+                handle.close();
             });
-            spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
-            let signal_done = done_flag.clone();
-            let signal_proxy = proxy.clone();
-            let mut signal_list = vec![SIGUSR1, SIGUSR2];
-            if rtmin > 0 {
-                for offset in 0..=11 {
-                    signal_list.push(rtmin + offset);
-                }
-            }
-            match Signals::new(signal_list) {
-                Ok(mut signals) => {
-                    let handle = signals.handle();
-                    let handle_done = done_flag.clone();
-                    std::thread::spawn(move || {
-                        while !handle_done.load(Ordering::Relaxed) {
-                            std::thread::sleep(Duration::from_millis(200));
-                        }
-                        handle.close();
-                    });
-                    std::thread::spawn(move || {
-                        for signal in signals.forever() {
-                            if signal_done.load(Ordering::Relaxed) {
-                                break;
-                            }
-                            if signal == SIGUSR1 {
-                                let _ = signal_proxy.send_event(AppEvent::HotkeyNotify);
-                            } else if signal == SIGUSR2 {
-                                let _ = signal_proxy.send_event(AppEvent::PinCancel);
-                            } else if rtmin > 0 {
-                                let submit = pin_signal_submit(rtmin);
-                                let backspace = pin_signal_backspace(rtmin);
-                                if signal == submit {
-                                    let _ = signal_proxy.send_event(AppEvent::PinSubmit);
-                                } else if signal == backspace {
-                                    let _ = signal_proxy.send_event(AppEvent::PinBackspace);
-                                } else if signal >= rtmin && signal <= rtmin + 9 {
-                                    let digit = (signal - rtmin) as u8;
-                                    let _ = signal_proxy.send_event(AppEvent::PinDigit(digit));
-                                }
-                            }
-                        }
-                    });
-                }
-                Err(err) => eprintln!("Failed to register signal handler: {err}"),
-            }
-            let tick_done = done_flag.clone();
-            let tick_proxy = proxy.clone();
             std::thread::spawn(move || {
-                while !tick_done.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_secs(1));
-                    if tick_done.load(Ordering::Relaxed) {
+                for signal in signals.forever() {
+                    if signal_done.load(Ordering::Relaxed) {
                         break;
                     }
-                    let _ = tick_proxy.send_event(AppEvent::Tick);
-                }
-            });
-            let focus_address = address.clone();
-            let mut last_relaunch = Instant::now() - Duration::from_secs(1);
-            let relaunch_backoff = Duration::from_millis(100);
-            let close_done = done_flag.clone();
-            spawn_hyprland_close_watcher(proxy.clone(), close_done, address.clone());
-
-            event_loop.run(move |event, _, control_flow| {
-                *control_flow = ControlFlow::Wait;
-                let response = state.handle_event(&event);
-                if response.pin_mode_started && rtmin > 0 {
-                    activate_pin_submap();
-                }
-                if response.pin_mode_ended && rtmin > 0 {
-                    reset_pin_submap();
-                }
-                if response.set_done_flag {
-                    done_flag.store(true, Ordering::Relaxed);
-                    overlay.hide();
-                    if rtmin > 0 {
-                        reset_pin_submap();
-                    }
-                }
-                if let tao::event::Event::UserEvent(AppEvent::FocusLost) = event {
-                    if let Ok(guard) = focus_address.lock() {
-                        focus_window_by_address(&guard);
-                    }
-                }
-                if let Some(timer_text) = response.timer_text.as_deref() {
-                    overlay.set_timer_text(timer_text);
-                }
-                if let Some(control_flow_value) = response.control_flow {
-                    *control_flow = control_flow_value;
-                }
-                while gtk::events_pending() {
-                    let _ = gtk::main_iteration_do(false);
-                }
-                if response.set_done_flag {
-                    *control_flow = ControlFlow::Exit;
-                }
-
-                if !done_flag.load(Ordering::Relaxed) {
-                    if let tao::event::Event::UserEvent(AppEvent::AppClosed(_)) = event {
-                        if last_relaunch.elapsed() < relaunch_backoff {
-                            return;
-                        }
-                        match launch_and_resolve(&app_cmd) {
-                            Ok(client) => {
-                                move_window_to_empty_workspace_by_address(&client.address);
-                                if let Ok(mut guard) = address.lock() {
-                                    *guard = client.address;
-                                }
-                                last_relaunch = Instant::now();
-                            }
-                            Err(err) => {
-                                eprintln!("{err}");
-                                done_flag.store(true, Ordering::Relaxed);
-                                overlay.hide();
-                                *control_flow = ControlFlow::Exit;
-                            }
+                    if signal == SIGUSR1 {
+                        let _ = signal_proxy.send_event(AppEvent::HotkeyNotify);
+                    } else if signal == SIGUSR2 {
+                        let _ = signal_proxy.send_event(AppEvent::PinCancel);
+                    } else if rtmin > 0 {
+                        let submit = pin_signal_submit(rtmin);
+                        let backspace = pin_signal_backspace(rtmin);
+                        if signal == submit {
+                            let _ = signal_proxy.send_event(AppEvent::PinSubmit);
+                        } else if signal == backspace {
+                            let _ = signal_proxy.send_event(AppEvent::PinBackspace);
+                        } else if signal >= rtmin && signal <= rtmin + 9 {
+                            let digit = (signal - rtmin) as u8;
+                            let _ = signal_proxy.send_event(AppEvent::PinDigit(digit));
                         }
                     }
                 }
             });
         }
-    };
+        Err(err) => eprintln!("Failed to register signal handler: {err}"),
+    }
+    let tick_done = done_flag.clone();
+    let tick_proxy = proxy.clone();
+    std::thread::spawn(move || {
+        while !tick_done.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+            if tick_done.load(Ordering::Relaxed) {
+                break;
+            }
+            let _ = tick_proxy.send_event(AppEvent::Tick);
+        }
+    });
+    let focus_address = address.clone();
+    let mut last_relaunch = Instant::now() - Duration::from_secs(1);
+    let relaunch_backoff = Duration::from_millis(100);
+    let close_done = done_flag.clone();
+    spawn_hyprland_close_watcher(proxy.clone(), close_done, address.clone());
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        let response = state.handle_event(&event);
+        if response.pin_mode_started && rtmin > 0 {
+            activate_pin_submap();
+        }
+        if response.pin_mode_ended && rtmin > 0 {
+            reset_pin_submap();
+        }
+        if response.set_done_flag {
+            done_flag.store(true, Ordering::Relaxed);
+            overlay.hide();
+            if rtmin > 0 {
+                reset_pin_submap();
+            }
+        }
+        if let tao::event::Event::UserEvent(AppEvent::FocusLost) = event {
+            if let Ok(guard) = focus_address.lock() {
+                focus_window_by_address(&guard);
+            }
+        }
+        if let Some(timer_text) = response.timer_text.as_deref() {
+            overlay.set_timer_text(timer_text);
+        }
+        if let Some(control_flow_value) = response.control_flow {
+            *control_flow = control_flow_value;
+        }
+        while gtk::events_pending() {
+            let _ = gtk::main_iteration_do(false);
+        }
+        if response.set_done_flag {
+            *control_flow = ControlFlow::Exit;
+        }
+
+        if !done_flag.load(Ordering::Relaxed) {
+            if let tao::event::Event::UserEvent(AppEvent::AppClosed(_)) = event {
+                if last_relaunch.elapsed() < relaunch_backoff {
+                    return;
+                }
+                match launch_and_resolve(&app_cmd) {
+                    Ok(client) => {
+                        move_window_to_empty_workspace_by_address(&client.address);
+                        if let Ok(mut guard) = address.lock() {
+                            *guard = client.address;
+                        }
+                        last_relaunch = Instant::now();
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        done_flag.store(true, Ordering::Relaxed);
+                        overlay.hide();
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+            }
+        }
+    });
 }
