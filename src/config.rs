@@ -1,13 +1,8 @@
 use clap::Parser;
-use url::Url;
-
 #[derive(Parser, Debug)]
 #[command(name = "focuslock")]
 #[command(about = "Fullscreen focus window with a timer overlay", long_about = None)]
 struct Args {
-    #[arg(long)]
-    url: Option<String>,
-
     #[arg(long)]
     app_cmd: Option<String>,
 
@@ -39,9 +34,6 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub enum RunTarget {
-    Web {
-        url: Url,
-    },
     App {
         app_cmd: String,
         app_class: Option<String>,
@@ -64,21 +56,15 @@ impl Config {
             );
         }
 
-        let target = match (args.url, args.app_cmd) {
-            (Some(url), None) => RunTarget::Web {
-                url: parse_url(&url)?,
-            },
-            (None, Some(app_cmd)) => RunTarget::App {
+        let target = match args.app_cmd {
+            Some(app_cmd) => RunTarget::App {
                 app_cmd,
                 app_class: args.app_class,
                 app_title: args.app_title,
                 app_timeout_ms: args.app_timeout_ms,
             },
-            (None, None) => {
-                return Err("must provide --url or --app-cmd".to_string());
-            }
-            (Some(_), Some(_)) => {
-                return Err("use either --url or --app-cmd, not both".to_string());
+            None => {
+                return Err("must provide --app-cmd".to_string());
             }
         };
 
@@ -87,13 +73,5 @@ impl Config {
             total_seconds,
             escape_key,
         })
-    }
-}
-
-fn parse_url(raw: &str) -> Result<Url, String> {
-    let url = Url::parse(raw).map_err(|err| format!("Invalid URL: {err}"))?;
-    match url.scheme() {
-        "http" | "https" => Ok(url),
-        _ => Err("URL must start with http:// or https://".to_string()),
     }
 }
