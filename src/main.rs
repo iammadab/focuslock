@@ -243,6 +243,7 @@ fn run_app_session(
             0
         }
     };
+    let mut timer_done = false;
     if rtmin > 0 {
         unbind_pin_submap();
         bind_pin_submap();
@@ -331,8 +332,7 @@ fn run_app_session(
             reset_pin_submap();
         }
         if response.set_done_flag {
-            done_flag.store(true, Ordering::Relaxed);
-            overlay.hide();
+            timer_done = true;
             if rtmin > 0 {
                 reset_pin_submap();
             }
@@ -352,11 +352,17 @@ fn run_app_session(
             let _ = gtk::main_iteration_do(false);
         }
         if response.set_done_flag {
-            *control_flow = ControlFlow::Exit;
+            *control_flow = ControlFlow::Wait;
         }
 
         if !done_flag.load(Ordering::Relaxed) {
             if let tao::event::Event::UserEvent(AppEvent::AppClosed(_)) = event {
+                if timer_done {
+                    done_flag.store(true, Ordering::Relaxed);
+                    overlay.hide();
+                    *control_flow = ControlFlow::Exit;
+                    return;
+                }
                 if last_relaunch.elapsed() < relaunch_backoff {
                     return;
                 }
