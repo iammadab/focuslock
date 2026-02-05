@@ -27,6 +27,8 @@ pub struct AppState {
     pin_buffer: String,
 }
 
+const DONE_TEXT: &str = "Done - close app to continue";
+
 impl AppState {
     pub fn new(total: Duration, escape_key: Option<String>, reset_on_focus_loss: bool) -> Self {
         Self {
@@ -129,8 +131,7 @@ impl AppState {
                 if matches {
                     self.pin_active = false;
                     self.pin_buffer.clear();
-                    self.done = true;
-                    response.set_done_flag = true;
+                    self.enter_done_state(&mut response);
                     response.pin_mode_ended = true;
                 } else {
                     self.pin_active = false;
@@ -172,6 +173,7 @@ impl AppState {
             self.pin_notice_until = None;
         }
         if self.done {
+            self.set_timer_text(response, DONE_TEXT);
             response.control_flow = Some(ControlFlow::Wait);
             return;
         }
@@ -195,11 +197,7 @@ impl AppState {
 
         let remaining = self.total.saturating_sub(self.start.unwrap().elapsed());
         if remaining.is_zero() {
-            self.done = true;
-            response.set_done_flag = true;
-            response.timer_text = Some("Done - close app to continue".to_string());
-            response.timer_text = Some("Done - close app to continue".to_string());
-            response.control_flow = Some(ControlFlow::Wait);
+            self.enter_done_state(response);
             return;
         }
 
@@ -223,5 +221,12 @@ impl AppState {
             format!("PIN: {masked}")
         };
         self.set_timer_text(response, &text);
+    }
+
+    fn enter_done_state(&mut self, response: &mut ControllerResponse) {
+        self.done = true;
+        response.set_done_flag = true;
+        self.set_timer_text(response, DONE_TEXT);
+        response.control_flow = Some(ControlFlow::Wait);
     }
 }
