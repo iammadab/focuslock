@@ -197,8 +197,8 @@ impl AppState {
         if remaining.is_zero() {
             self.done = true;
             response.set_done_flag = true;
-            response.timer_text = Some("Done".to_string());
-            response.timer_text = Some("Done".to_string());
+            response.timer_text = Some("Done - close app to continue".to_string());
+            response.timer_text = Some("Done - close app to continue".to_string());
             response.control_flow = Some(ControlFlow::Wait);
             return;
         }
