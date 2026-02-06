@@ -1,4 +1,6 @@
 use clap::Parser;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use url::Url;
 #[derive(Parser, Debug)]
 #[command(name = "focuslock")]
@@ -45,9 +47,10 @@ pub enum RunTarget {
 impl Config {
     pub fn from_args() -> Result<Self, String> {
         let args = Args::parse();
-        let escape_key = args
-            .escape_key
-            .or_else(|| std::env::var("FOCUSLOCK_ESCAPE_KEY").ok());
+        let escape_key = match args.escape_key {
+            Some(key) => Some(key),
+            None => read_escape_key_file()?,
+        };
         let total_seconds = args.minutes.saturating_mul(60).saturating_add(args.seconds);
         if total_seconds == 0 {
             return Err(
@@ -78,6 +81,40 @@ impl Config {
             total_seconds,
             escape_key,
         })
+    }
+}
+
+fn read_escape_key_file() -> Result<Option<String>, String> {
+    let path = escape_key_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            let trimmed = contents.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!(
+            "failed to read escape key file {}: {err}",
+            path.display()
+        )),
+    }
+}
+
+fn escape_key_path() -> Result<PathBuf, String> {
+    let config_home = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| PathBuf::from(home).join(".config"))
+        });
+    match config_home {
+        Some(config_home) => Ok(config_home.join("focuslock").join("focuslock.key")),
+        None => Err("XDG_CONFIG_HOME and HOME are not set".to_string()),
     }
 }
 

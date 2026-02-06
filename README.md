@@ -38,8 +38,8 @@ Flags:
 - `--seconds`: seconds to focus (optional)
 - `--escape-key`: enable unlock prompt with a PIN (optional)
 
-Environment:
-- `FOCUSLOCK_ESCAPE_KEY`: PIN for the unlock prompt (CLI flag overrides this)
+Config:
+- `~/.config/focuslock/focuslock.key`: PIN for the unlock prompt (CLI flag overrides this)
 
 ## Advanced
 
