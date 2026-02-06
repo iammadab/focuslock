@@ -148,6 +148,37 @@ fn hyprland_active_monitor_name() -> Option<String> {
     None
 }
 
+fn is_internal_monitor(name: &str) -> bool {
+    name.starts_with("eDP") || name.starts_with("LVDS")
+}
+
+fn hyprland_preferred_monitor_name() -> Option<String> {
+    let output = Command::new("hyprctl")
+        .args(["-j", "monitors"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let monitors = value.as_array()?;
+    let mut focused: Option<String> = None;
+    for monitor in monitors {
+        let name = monitor.get("name").and_then(|name| name.as_str())?;
+        if !is_internal_monitor(name) {
+            return Some(name.to_string());
+        }
+        if focused.is_none() {
+            if monitor.get("focused").and_then(|focused| focused.as_bool()) == Some(true) {
+                focused = Some(name.to_string());
+            }
+        }
+    }
+
+    focused.or_else(hyprland_active_monitor_name)
+}
+
 fn hyprland_used_workspace_ids() -> Option<Vec<i64>> {
     let output = Command::new("hyprctl")
         .args(["-j", "workspaces"])
@@ -179,7 +210,7 @@ fn next_empty_workspace_id(min_id: i64) -> Option<i64> {
 }
 
 pub fn move_window_to_empty_workspace(pid: u32) {
-    if let Some(monitor_name) = hyprland_active_monitor_name() {
+    if let Some(monitor_name) = hyprland_preferred_monitor_name() {
         let _ = Command::new("hyprctl")
             .args(["dispatch", "focusmonitor", &monitor_name])
             .status();
@@ -236,7 +267,7 @@ pub fn move_window_to_empty_workspace(pid: u32) {
 }
 
 pub fn move_window_to_empty_workspace_by_address(address: &str) {
-    if let Some(monitor_name) = hyprland_active_monitor_name() {
+    if let Some(monitor_name) = hyprland_preferred_monitor_name() {
         let _ = Command::new("hyprctl")
             .args(["dispatch", "focusmonitor", &monitor_name])
             .status();
