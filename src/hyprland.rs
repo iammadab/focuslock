@@ -125,29 +125,6 @@ pub fn resolve_app_window(pid: u32, timeout_ms: u64) -> Result<ClientInfo, Strin
     }
 }
 
-fn hyprland_active_monitor_name() -> Option<String> {
-    let output = Command::new("hyprctl")
-        .args(["-j", "monitors"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let monitors = value.as_array()?;
-    for monitor in monitors {
-        let focused = monitor.get("focused")?.as_bool()?;
-        if focused {
-            return monitor
-                .get("name")
-                .and_then(|name| name.as_str())
-                .map(|name| name.to_string());
-        }
-    }
-    None
-}
-
 fn is_internal_monitor(name: &str) -> bool {
     name.starts_with("eDP") || name.starts_with("LVDS")
 }
@@ -176,7 +153,7 @@ fn hyprland_preferred_monitor_name() -> Option<String> {
         }
     }
 
-    focused.or_else(hyprland_active_monitor_name)
+    focused
 }
 
 fn hyprland_used_workspace_ids() -> Option<Vec<i64>> {
