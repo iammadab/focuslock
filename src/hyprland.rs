@@ -31,27 +31,6 @@ fn hyprland_socket_path() -> Option<PathBuf> {
     )
 }
 
-fn find_hyprland_address(pid: u32) -> Option<String> {
-    let output = Command::new("hyprctl")
-        .args(["-j", "clients"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let clients = value.as_array()?;
-    for client in clients {
-        let client_pid = client.get("pid")?.as_u64()? as u32;
-        if client_pid == pid {
-            let address = client.get("address")?.as_str()?;
-            return Some(address.to_string());
-        }
-    }
-    None
-}
-
 pub fn list_hyprland_clients() -> Vec<ClientInfo> {
     let output = Command::new("hyprctl").args(["-j", "clients"]).output();
     let Ok(output) = output else {
@@ -125,7 +104,11 @@ pub fn resolve_app_window(pid: u32, timeout_ms: u64) -> Result<ClientInfo, Strin
     }
 }
 
-fn hyprland_active_monitor_name() -> Option<String> {
+fn is_internal_monitor(name: &str) -> bool {
+    name.starts_with("eDP") || name.starts_with("LVDS")
+}
+
+fn hyprland_preferred_monitor_name() -> Option<String> {
     let output = Command::new("hyprctl")
         .args(["-j", "monitors"])
         .output()
@@ -136,16 +119,20 @@ fn hyprland_active_monitor_name() -> Option<String> {
 
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     let monitors = value.as_array()?;
+    let mut focused: Option<String> = None;
     for monitor in monitors {
-        let focused = monitor.get("focused")?.as_bool()?;
-        if focused {
-            return monitor
-                .get("name")
-                .and_then(|name| name.as_str())
-                .map(|name| name.to_string());
+        let name = monitor.get("name").and_then(|name| name.as_str())?;
+        if !is_internal_monitor(name) {
+            return Some(name.to_string());
+        }
+        if focused.is_none() {
+            if monitor.get("focused").and_then(|focused| focused.as_bool()) == Some(true) {
+                focused = Some(name.to_string());
+            }
         }
     }
-    None
+
+    focused
 }
 
 fn hyprland_used_workspace_ids() -> Option<Vec<i64>> {
@@ -178,65 +165,8 @@ fn next_empty_workspace_id(min_id: i64) -> Option<i64> {
     None
 }
 
-pub fn move_window_to_empty_workspace(pid: u32) {
-    if let Some(monitor_name) = hyprland_active_monitor_name() {
-        let _ = Command::new("hyprctl")
-            .args(["dispatch", "focusmonitor", &monitor_name])
-            .status();
-    }
-
-    let workspace_id = match next_empty_workspace_id(2) {
-        Some(id) => id,
-        None => return,
-    };
-
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "workspace", &workspace_id.to_string()])
-        .status();
-
-    let mut address = None;
-    for _ in 0..20 {
-        address = find_hyprland_address(pid);
-        if address.is_some() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-
-    let Some(address) = address else {
-        return;
-    };
-
-    let target = format!("{workspace_id},address:{address}");
-    let moved = Command::new("hyprctl")
-        .args(["dispatch", "movetoworkspacesilent", &target])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-
-    if !moved {
-        let _ = Command::new("hyprctl")
-            .args(["dispatch", "focuswindow", &format!("address:{address}")])
-            .status();
-        let _ = Command::new("hyprctl")
-            .args([
-                "dispatch",
-                "movetoworkspacesilent",
-                &workspace_id.to_string(),
-            ])
-            .status();
-    }
-
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "workspace", &workspace_id.to_string()])
-        .status();
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "focuswindow", &format!("address:{address}")])
-        .status();
-}
-
 pub fn move_window_to_empty_workspace_by_address(address: &str) {
-    if let Some(monitor_name) = hyprland_active_monitor_name() {
+    if let Some(monitor_name) = hyprland_preferred_monitor_name() {
         let _ = Command::new("hyprctl")
             .args(["dispatch", "focusmonitor", &monitor_name])
             .status();
@@ -277,70 +207,6 @@ pub fn move_window_to_empty_workspace_by_address(address: &str) {
     let _ = Command::new("hyprctl")
         .args(["dispatch", "focuswindow", &format!("address:{address}")])
         .status();
-}
-
-pub fn spawn_hyprland_watchdog(proxy: EventLoopProxy<AppEvent>, done: Arc<AtomicBool>) {
-    thread::spawn(move || {
-        let socket_path = match hyprland_socket_path() {
-            Some(path) => path,
-            None => return,
-        };
-        let stream = match UnixStream::connect(socket_path) {
-            Ok(stream) => stream,
-            Err(_) => return,
-        };
-
-        let pid = std::process::id();
-        let mut address = find_hyprland_address(pid);
-        let mut last_refocus = Instant::now() - Duration::from_secs(5);
-        let reader = BufReader::new(stream);
-
-        for line in reader.lines().flatten() {
-            if done.load(Ordering::Relaxed) {
-                break;
-            }
-            let line = line.trim();
-            if !line.starts_with("activewindowv2>>") {
-                continue;
-            }
-
-            let payload = &line["activewindowv2>>".len()..];
-            let active_addr = payload.split(',').next().unwrap_or("");
-            if active_addr.is_empty() {
-                continue;
-            }
-
-            if address.as_deref() == Some(active_addr) {
-                continue;
-            }
-
-            if address.is_none() {
-                address = find_hyprland_address(pid);
-            }
-
-            let Some(refocus_addr) = address.clone() else {
-                continue;
-            };
-
-            if last_refocus.elapsed() < Duration::from_millis(100) {
-                continue;
-            }
-            last_refocus = Instant::now();
-
-            if done.load(Ordering::Relaxed) {
-                break;
-            }
-
-            let _ = Command::new("hyprctl")
-                .args([
-                    "dispatch",
-                    "focuswindow",
-                    &format!("address:{refocus_addr}"),
-                ])
-                .status();
-            let _ = proxy.send_event(AppEvent::FocusLost);
-        }
-    });
 }
 
 pub fn spawn_hyprland_watchdog_address(
