@@ -53,10 +53,6 @@ impl AppState {
         self.next_tick = now;
     }
 
-    pub fn next_tick(&self) -> Instant {
-        self.next_tick
-    }
-
     pub fn handle_event(&mut self, event: &Event<AppEvent>) -> ControllerResponse {
         let mut response = ControllerResponse {
             control_flow: None,
