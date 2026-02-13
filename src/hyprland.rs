@@ -18,6 +18,7 @@ use crate::AppEvent;
 pub struct ClientInfo {
     pub pid: u32,
     pub address: String,
+    pub class: String,
 }
 
 fn hyprland_socket_path() -> Option<PathBuf> {
@@ -57,11 +58,20 @@ pub fn list_hyprland_clients() -> Vec<ClientInfo> {
             .and_then(|addr| addr.as_str())
             .unwrap_or("")
             .to_string();
+        let class = client
+            .get("class")
+            .and_then(|class| class.as_str())
+            .unwrap_or("")
+            .to_string();
         if pid == 0 || address.is_empty() {
             continue;
         }
 
-        results.push(ClientInfo { pid, address });
+        results.push(ClientInfo {
+            pid,
+            address,
+            class,
+        });
     }
 
     results
@@ -74,7 +84,10 @@ pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
 }
 
 fn format_client_summary(client: &ClientInfo) -> String {
-    format!("pid={} address={}", client.pid, client.address)
+    format!(
+        "pid={} address={} class={}",
+        client.pid, client.address, client.class
+    )
 }
 
 pub fn resolve_app_window(pid: u32, timeout_ms: u64) -> Result<ClientInfo, String> {
