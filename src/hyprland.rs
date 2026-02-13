@@ -273,7 +273,24 @@ pub fn spawn_hyprland_watchdog_address(
             let active_addr = payload.split(',').next().unwrap_or("");
             let normalized_active = match normalize_address(active_addr) {
                 Some(address) => address,
-                None => continue,
+                None => {
+                    let current_address = match address.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => return,
+                    };
+                    if last_refocus.elapsed() < Duration::from_millis(50) {
+                        continue;
+                    }
+                    last_refocus = Instant::now();
+                    let _ = Command::new("hyprctl")
+                        .args([
+                            "dispatch",
+                            "focuswindow",
+                            &format!("address:{current_address}"),
+                        ])
+                        .status();
+                    continue;
+                }
             };
 
             let current_address = match address.lock() {
