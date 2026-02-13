@@ -276,20 +276,20 @@ pub fn spawn_hyprland_watchdog_address(
                 None => continue,
             };
 
-            let active_class = find_client_by_address(&normalized_active)
-                .map(|client| client.class)
-                .unwrap_or_default()
-                .to_lowercase();
-            if !active_class.is_empty() && allow_classes.contains(&active_class) {
-                continue;
-            }
-
             let current_address = match address.lock() {
                 Ok(guard) => guard.clone(),
                 Err(_) => return,
             };
 
             if normalized_active == current_address {
+                continue;
+            }
+
+            let active_class = find_client_by_address(&normalized_active)
+                .map(|client| client.class)
+                .unwrap_or_default()
+                .to_lowercase();
+            if !active_class.is_empty() && allow_classes.contains(&active_class) {
                 continue;
             }
 
@@ -301,6 +301,14 @@ pub fn spawn_hyprland_watchdog_address(
             if done.load(Ordering::Relaxed) {
                 break;
             }
+
+            let _ = Command::new("hyprctl")
+                .args([
+                    "dispatch",
+                    "closewindow",
+                    &format!("address:{normalized_active}"),
+                ])
+                .status();
 
             let _ = Command::new("hyprctl")
                 .args([
