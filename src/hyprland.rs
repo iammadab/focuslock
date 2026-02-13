@@ -77,6 +77,25 @@ pub fn list_hyprland_clients() -> Vec<ClientInfo> {
     results
 }
 
+fn normalize_address(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("0x") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("0x{trimmed}"))
+    }
+}
+
+fn find_client_by_address(address: &str) -> Option<ClientInfo> {
+    let normalized = normalize_address(address)?;
+    list_hyprland_clients()
+        .into_iter()
+        .find(|client| client.address == normalized)
+}
+
 pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
     list_hyprland_clients()
         .into_iter()
@@ -226,6 +245,7 @@ pub fn spawn_hyprland_watchdog_address(
     proxy: EventLoopProxy<AppEvent>,
     done: Arc<AtomicBool>,
     address: Arc<std::sync::Mutex<String>>,
+    allow_classes: Arc<Vec<String>>,
 ) {
     thread::spawn(move || {
         let socket_path = match hyprland_socket_path() {
@@ -251,7 +271,16 @@ pub fn spawn_hyprland_watchdog_address(
 
             let payload = &line["activewindowv2>>".len()..];
             let active_addr = payload.split(',').next().unwrap_or("");
-            if active_addr.is_empty() {
+            let normalized_active = match normalize_address(active_addr) {
+                Some(address) => address,
+                None => continue,
+            };
+
+            let active_class = find_client_by_address(&normalized_active)
+                .map(|client| client.class)
+                .unwrap_or_default()
+                .to_lowercase();
+            if !active_class.is_empty() && allow_classes.contains(&active_class) {
                 continue;
             }
 
@@ -260,7 +289,7 @@ pub fn spawn_hyprland_watchdog_address(
                 Err(_) => return,
             };
 
-            if active_addr == current_address {
+            if normalized_active == current_address {
                 continue;
             }
 
