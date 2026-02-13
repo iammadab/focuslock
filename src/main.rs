@@ -167,6 +167,7 @@ fn main() {
         target,
         total_seconds,
         escape_key,
+        allow_classes,
     } = config;
 
     let total = Duration::from_secs(total_seconds);
@@ -184,13 +185,13 @@ fn main() {
                 }
             };
             let app_cmd = chromium_app_command(url.as_str(), &profile_dir);
-            run_app_session(total, escape_key, app_cmd, app_timeout_ms);
+            run_app_session(total, escape_key, allow_classes, app_cmd, app_timeout_ms);
         }
         RunTarget::App {
             app_cmd,
             app_timeout_ms,
         } => {
-            run_app_session(total, escape_key, app_cmd, app_timeout_ms);
+            run_app_session(total, escape_key, allow_classes, app_cmd, app_timeout_ms);
         }
     };
 }
@@ -198,6 +199,7 @@ fn main() {
 fn run_app_session(
     total: Duration,
     escape_key: Option<String>,
+    mut allow_classes: Vec<String>,
     app_cmd: String,
     app_timeout_ms: u64,
 ) {
@@ -230,6 +232,11 @@ fn run_app_session(
         }
     };
 
+    let resolved_class = resolved.class.trim().to_lowercase();
+    if !resolved_class.is_empty() && !allow_classes.contains(&resolved_class) {
+        allow_classes.push(resolved_class);
+    }
+
     state.mark_loaded();
 
     move_window_to_empty_workspace_by_address(&resolved.address);
@@ -260,7 +267,13 @@ fn run_app_session(
             unbind_pin_submap();
         }
     });
-    spawn_hyprland_watchdog_address(proxy.clone(), done_flag.clone(), address.clone());
+    let allow_classes = Arc::new(allow_classes);
+    spawn_hyprland_watchdog_address(
+        proxy.clone(),
+        done_flag.clone(),
+        address.clone(),
+        allow_classes,
+    );
     let signal_done = done_flag.clone();
     let signal_proxy = proxy.clone();
     let mut signal_list = vec![SIGUSR1, SIGUSR2];

@@ -23,6 +23,9 @@ struct Args {
 
     #[arg(long)]
     escape_key: Option<String>,
+
+    #[arg(long)]
+    allow_classes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +33,7 @@ pub struct Config {
     pub target: RunTarget,
     pub total_seconds: u64,
     pub escape_key: Option<String>,
+    pub allow_classes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +62,7 @@ impl Config {
                     .to_string(),
             );
         }
+        let allow_classes = parse_allow_classes(args.allow_classes.as_deref());
 
         let target = match (args.url, args.app_cmd) {
             (Some(url), None) => RunTarget::Web {
@@ -80,8 +85,20 @@ impl Config {
             target,
             total_seconds,
             escape_key,
+            allow_classes,
         })
     }
+}
+
+fn parse_allow_classes(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    raw.split(',')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_lowercase())
+        .collect()
 }
 
 fn read_escape_key_file() -> Result<Option<String>, String> {

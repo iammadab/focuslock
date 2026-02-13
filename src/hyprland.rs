@@ -18,6 +18,7 @@ use crate::AppEvent;
 pub struct ClientInfo {
     pub pid: u32,
     pub address: String,
+    pub class: String,
 }
 
 fn hyprland_socket_path() -> Option<PathBuf> {
@@ -57,14 +58,42 @@ pub fn list_hyprland_clients() -> Vec<ClientInfo> {
             .and_then(|addr| addr.as_str())
             .unwrap_or("")
             .to_string();
+        let class = client
+            .get("class")
+            .and_then(|class| class.as_str())
+            .unwrap_or("")
+            .to_string();
         if pid == 0 || address.is_empty() {
             continue;
         }
 
-        results.push(ClientInfo { pid, address });
+        results.push(ClientInfo {
+            pid,
+            address,
+            class,
+        });
     }
 
     results
+}
+
+fn normalize_address(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("0x") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("0x{trimmed}"))
+    }
+}
+
+fn find_client_by_address(address: &str) -> Option<ClientInfo> {
+    let normalized = normalize_address(address)?;
+    list_hyprland_clients()
+        .into_iter()
+        .find(|client| client.address == normalized)
 }
 
 pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
@@ -74,7 +103,10 @@ pub fn find_client_by_pid(pid: u32) -> Option<ClientInfo> {
 }
 
 fn format_client_summary(client: &ClientInfo) -> String {
-    format!("pid={} address={}", client.pid, client.address)
+    format!(
+        "pid={} address={} class={}",
+        client.pid, client.address, client.class
+    )
 }
 
 pub fn resolve_app_window(pid: u32, timeout_ms: u64) -> Result<ClientInfo, String> {
@@ -213,6 +245,7 @@ pub fn spawn_hyprland_watchdog_address(
     proxy: EventLoopProxy<AppEvent>,
     done: Arc<AtomicBool>,
     address: Arc<std::sync::Mutex<String>>,
+    allow_classes: Arc<Vec<String>>,
 ) {
     thread::spawn(move || {
         let socket_path = match hyprland_socket_path() {
@@ -238,16 +271,42 @@ pub fn spawn_hyprland_watchdog_address(
 
             let payload = &line["activewindowv2>>".len()..];
             let active_addr = payload.split(',').next().unwrap_or("");
-            if active_addr.is_empty() {
-                continue;
-            }
+            let normalized_active = match normalize_address(active_addr) {
+                Some(address) => address,
+                None => {
+                    let current_address = match address.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => return,
+                    };
+                    if last_refocus.elapsed() < Duration::from_millis(50) {
+                        continue;
+                    }
+                    last_refocus = Instant::now();
+                    let _ = Command::new("hyprctl")
+                        .args([
+                            "dispatch",
+                            "focuswindow",
+                            &format!("address:{current_address}"),
+                        ])
+                        .status();
+                    continue;
+                }
+            };
 
             let current_address = match address.lock() {
                 Ok(guard) => guard.clone(),
                 Err(_) => return,
             };
 
-            if active_addr == current_address {
+            if normalized_active == current_address {
+                continue;
+            }
+
+            let active_class = find_client_by_address(&normalized_active)
+                .map(|client| client.class)
+                .unwrap_or_default()
+                .to_lowercase();
+            if !active_class.is_empty() && allow_classes.contains(&active_class) {
                 continue;
             }
 
@@ -259,6 +318,14 @@ pub fn spawn_hyprland_watchdog_address(
             if done.load(Ordering::Relaxed) {
                 break;
             }
+
+            let _ = Command::new("hyprctl")
+                .args([
+                    "dispatch",
+                    "closewindow",
+                    &format!("address:{normalized_active}"),
+                ])
+                .status();
 
             let _ = Command::new("hyprctl")
                 .args([
